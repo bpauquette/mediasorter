@@ -1,0 +1,10 @@
+family photo
+selfie
+pet
+landscape
+food
+document
+screenshot
+car
+indoor photo
+outdoor photo
