@@ -1,0 +1,9 @@
+{
+  "files": [
+    "mediasorter.py",
+    "mediasorter_cli.py",
+    "mediasorter_core.py",
+    "mediasorter_widgets.py",
+    "mediasorter_window.py"
+  ]
+}

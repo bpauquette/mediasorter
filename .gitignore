@@ -1,0 +1,23 @@
+﻿# Python caches
+__pycache__/
+*.py[cod]
+
+# Virtual environments
+.venv/
+.bundle-venv/
+.nuitka-test/
+
+# Build/deploy output
+dist/
+deployment/
+deployment_test/
+
+# Logs and crash artifacts
+*.log
+debug.log
+nuitka-crash-report.xml
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
+.vscode/

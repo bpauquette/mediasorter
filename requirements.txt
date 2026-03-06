@@ -1,0 +1,11 @@
+PySide6>=6.5
+Pillow>=9.0
+pillow-heif>=0.16.0
+imageio>=2.31
+numpy>=1.24
+platformdirs>=4.0
+# Required for face identification and robust image decode path handling.
+opencv-contrib-python-headless>=4.10.0.84
+
+# Optional AI provider dependencies live in:
+#   ai_backend/providers/clip_local/requirements.txt

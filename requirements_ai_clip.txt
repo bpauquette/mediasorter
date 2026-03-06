@@ -1,0 +1,1 @@
+-r ai_backend/providers/clip_local/requirements.txt
