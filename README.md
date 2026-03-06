@@ -15,11 +15,22 @@ Desktop photo/video sorter with optional runtime AI providers.
 ## Run (Windows)
 
 ```powershell
-cd C:\Users\bryan\repos\mediasorter
-python -m venv .venv
-.\.venv\Scripts\activate
-pip install -r requirements.txt
-python mediasorter.py
+# From the repo root:
+.\run_gui.cmd
+```
+
+`run_gui.cmd` handles the runtime setup for you:
+
+- creates `.venv` (Python 3.12) if missing
+- installs/syncs dependencies
+- launches the GUI
+
+Manual setup (advanced only):
+
+```powershell
+py -3.12 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\python.exe mediasorter.py
 ```
 
 Optional CLIP provider install:
@@ -35,7 +46,7 @@ and runs inference through a worker subprocess.
 ## Bundle (Windows 10/11)
 
 ```powershell
-cd C:\Users\bryan\repos\mediasorter
+# From the repo root:
 .\build_windows_bundle.cmd --clean --standalone
 ```
 

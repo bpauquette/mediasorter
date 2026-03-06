@@ -106,6 +106,8 @@ class MediaSorter(QWidget):
         self.chk_interactive.setChecked(False)
         self.chk_people = QCheckBox("Identify People After Run (faces)")
         self.chk_people.setChecked(False)
+        self.btn_people_scan_now = QPushButton("Run Face Scan On Output")
+        self.btn_people_scan_now.clicked.connect(self.run_people_scan_now)
         self.chk_sortviz = QCheckBox("Show Stacks Animation (Batch Mode)")
         self.chk_sortviz.setChecked(True)
         self.cmb_ai_provider = QComboBox()
@@ -146,6 +148,7 @@ class MediaSorter(QWidget):
         options_layout.addWidget(self.chk_convert_videos)
         options_layout.addWidget(self.chk_interactive)
         options_layout.addWidget(self.chk_people)
+        options_layout.addWidget(self.btn_people_scan_now)
         options_layout.addWidget(self.chk_sortviz)
         options_layout.addWidget(QLabel("AI Provider:"))
         options_layout.addWidget(self.cmb_ai_provider)
@@ -242,6 +245,7 @@ class MediaSorter(QWidget):
 
         self.model_thread = None
         self.provider_install_thread = None
+        self._people_scan_only = False
 
         # Optional: autorun without user clicks (useful for long-running jobs).
         self.autorun_input = os.environ.get("MEDIASORTER_AUTORUN_INPUT")
@@ -861,6 +865,93 @@ class MediaSorter(QWidget):
         except Exception:
             pass
 
+    def _show_people_review_for_thread(self, th) -> bool:
+        try:
+            if th is None:
+                return False
+            clusters = []
+            for cl in (getattr(th, "people_clusters", []) or []):
+                # Only prompt for unknown clusters of non-trivial size.
+                if cl.get("name"):
+                    continue
+                if int(cl.get("count") or 0) < 4:
+                    continue
+                clusters.append(cl)
+            clusters.sort(key=lambda c: int(c.get("count") or 0), reverse=True)
+            if clusters:
+                dlg = PeopleReviewDialog(self, clusters, getattr(th, "people_output_map", {}), self.output_folder)
+                dlg.exec()
+                return True
+        except Exception:
+            pass
+        return False
+
+    def run_people_scan_now(self):
+        try:
+            t = getattr(self, "thread", None)
+            if t is not None and t.isRunning():
+                QMessageBox.information(self, "Face Scan", "Another processing task is currently running.")
+                return
+        except Exception:
+            pass
+
+        if not self.output_folder:
+            QMessageBox.information(self, "Output Folder Required", "Please choose an output folder first.")
+            self.select_output()
+            if not self.output_folder:
+                return
+
+        face_status = core.get_face_support_status()
+        if not bool(face_status.get("supported")):
+            QMessageBox.warning(self, "Face Identification Unavailable", str(face_status.get("detail") or "Unavailable"))
+            return
+
+        self._people_scan_only = True
+        self.btn_people_scan_now.setEnabled(False)
+        self.progress.setRange(0, 0)
+        self.progress.setFormat("Scanning faces in output...")
+        self.status_label.setText("Status: Running face scan on output folder...")
+
+        self.thread = AutoProcessThread(
+            files=[],
+            input_folder=self.output_folder,
+            output_folder=self.output_folder,
+            convert_videos=False,
+            start_index=0,
+            structure_pattern=self._get_structure_pattern(),
+            enable_people=True,
+        )
+        self.thread.status_signal.connect(self.on_auto_status)
+        self.thread.done_signal.connect(self.people_scan_done)
+        self.thread.start()
+
+    def people_scan_done(self, _counts):
+        self._people_scan_only = False
+        self.btn_people_scan_now.setEnabled(True)
+        self.progress.setRange(0, 1)
+        self.progress.setValue(1)
+        self.progress.setFormat("%v/%m")
+        self.status_label.setText("Status: Face scan complete")
+
+        shown = self._show_people_review_for_thread(getattr(self, "thread", None))
+        try:
+            all_clusters = list(getattr(self.thread, "people_clusters", []) or [])
+        except Exception:
+            all_clusters = []
+        unknown = [cl for cl in all_clusters if not cl.get("name")]
+        QMessageBox.information(
+            self,
+            "Face Scan Complete",
+            f"Clusters found: {len(all_clusters)}\n"
+            f"Unknown clusters: {len(unknown)}\n"
+            f"Review dialog shown: {'Yes' if shown else 'No'}",
+        )
+
+        try:
+            self.btn_start.setEnabled(bool(core._MODEL_READY and not core._MODEL_LOAD_ERROR))
+        except Exception:
+            pass
+
     def auto_done(self, counts):
         try:
             self.sortviz.set_running(False)
@@ -878,18 +969,7 @@ class MediaSorter(QWidget):
         # Post-run people identification flow (batch mode only).
         try:
             if getattr(self, "thread", None) is not None and bool(self.chk_people.isChecked()) and (not self.chk_interactive.isChecked()):
-                clusters = []
-                for cl in (getattr(self.thread, "people_clusters", []) or []):
-                    # Only prompt for unknown clusters of non-trivial size.
-                    if cl.get("name"):
-                        continue
-                    if int(cl.get("count") or 0) < 4:
-                        continue
-                    clusters.append(cl)
-                clusters.sort(key=lambda c: int(c.get("count") or 0), reverse=True)
-                if clusters:
-                    dlg = PeopleReviewDialog(self, clusters, getattr(self.thread, "people_output_map", {}), self.output_folder)
-                    dlg.exec()
+                self._show_people_review_for_thread(self.thread)
         except Exception:
             pass
 

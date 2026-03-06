@@ -44,6 +44,16 @@ def main(argv=None):
         action="store_true",
         help="Print HEIC/HEIF decoder status for the current runtime and exit.",
     )
+    parser.add_argument(
+        "--people-scan-dir",
+        help="Scan an already-sorted output folder recursively for faces (no recategorization).",
+    )
+    parser.add_argument(
+        "--people-min-cluster",
+        type=int,
+        default=4,
+        help="With --people-scan-dir, minimum unknown-cluster size to report.",
+    )
     parser.add_argument("--classify-dir", help="Classify images in a folder and print results (no GUI).")
     parser.add_argument("--topk", type=int, default=3, help="With --classify-dir, show the top K matches.")
     parser.add_argument("--json", action="store_true", help="With --classify-dir, output JSON lines.")
@@ -95,6 +105,59 @@ def main(argv=None):
     if args.heic_status:
         status = core.get_heic_support_status()
         print(json.dumps(status, ensure_ascii=False))
+        return 0
+
+    if args.people_scan_dir:
+        out_dir = Path(args.people_scan_dir).expanduser().resolve()
+        if not out_dir.exists() or not out_dir.is_dir():
+            print(f"Not a directory: {out_dir}")
+            return 2
+
+        face_status = core.get_face_support_status()
+        if not bool(face_status.get("supported")):
+            print(str(face_status.get("detail") or "Face scan unsupported in this runtime."))
+            return 1
+
+        worker = core.AutoProcessThread(
+            files=[],
+            input_folder=str(out_dir),
+            output_folder=str(out_dir),
+            convert_videos=False,
+            start_index=0,
+            structure_pattern="{category}",
+            enable_people=True,
+        )
+        worker.status_signal.connect(print)
+        worker._scan_people_from_output_recursive()  # face-scan only
+
+        clusters = sorted(
+            list(getattr(worker, "people_clusters", []) or []),
+            key=lambda c: int(c.get("count") or 0),
+            reverse=True,
+        )
+        min_cluster = max(1, int(args.people_min_cluster or 4))
+        unknown = [c for c in clusters if (not c.get("name")) and int(c.get("count") or 0) >= min_cluster]
+        summary = {
+            "output_dir": str(out_dir),
+            "total_clusters": len(clusters),
+            "unknown_clusters_min": min_cluster,
+            "unknown_clusters": len(unknown),
+            "top_unknown": [
+                {
+                    "count": int(c.get("count") or 0),
+                    "rep_path": str(c.get("rep_path") or ""),
+                }
+                for c in unknown[:50]
+            ],
+        }
+        if args.json:
+            print(json.dumps(summary, ensure_ascii=False))
+        else:
+            print(f"People scan complete for: {out_dir}")
+            print(f"Total clusters: {summary['total_clusters']}")
+            print(f"Unknown clusters (count >= {min_cluster}): {summary['unknown_clusters']}")
+            for i, c in enumerate(summary["top_unknown"], 1):
+                print(f"{i}. count={c['count']} rep={c['rep_path']}")
         return 0
 
     if args.classify_dir:
