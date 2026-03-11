@@ -68,7 +68,7 @@ from mediasorter_core import (
     pil_to_qpixmap,
 )
 import mediasorter_core as core
-from mediasorter_widgets import PeopleReviewDialog, SortingStacksView
+from mediasorter_widgets import PeopleReviewDialog
 
 
 UI_SETTINGS_FILE = Path(core.DATA_DIR) / "ui_settings.json"
@@ -241,8 +241,6 @@ class MediaSorter(QMainWindow):
         )
         self.lbl_face_hint.setWordWrap(True)
         self.lbl_face_hint.setObjectName("HintText")
-        self.chk_sortviz = QCheckBox("Show live stacks animation during batch sorting")
-        self.chk_sortviz.setChecked(False)
         self.cmb_ai_provider = QComboBox()
         for opt in core.get_ai_provider_options():
             self.cmb_ai_provider.addItem(str(opt.get("label") or opt.get("id")), str(opt.get("id")))
@@ -343,7 +341,6 @@ class MediaSorter(QMainWindow):
         power_options_box.setObjectName("InnerCard")
         power_options_layout = QVBoxLayout()
         power_options_layout.addWidget(self.chk_convert_videos)
-        power_options_layout.addWidget(self.chk_sortviz)
         power_options_box.setLayout(power_options_layout)
 
         ai_box = QGroupBox("AI Runtime")
@@ -381,29 +378,6 @@ class MediaSorter(QMainWindow):
         self.btn_toggle_advanced.setCheckable(True)
         self.btn_toggle_advanced.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
         self.btn_toggle_advanced.toggled.connect(lambda on: self.chk_show_advanced.setChecked(bool(on)))
-
-        # Sorting visualization (prototype)
-        self.sortviz = SortingStacksView()
-        self.sortviz_box = QGroupBox("Live Sorting View")
-        self.sortviz_box.setObjectName("PreviewCard")
-        sortviz_layout = QVBoxLayout()
-        sortviz_layout.addWidget(self.sortviz)
-        self.sortviz_box.setLayout(sortviz_layout)
-        self.sortviz_box.setVisible(bool(self.chk_sortviz.isChecked()))
-
-        def _toggle_sortviz():
-            on = bool(self.chk_sortviz.isChecked())
-            self.sortviz_box.setVisible(on)
-            try:
-                # Only run animation during processing.
-                if hasattr(self, "thread") and getattr(self, "thread", None) is not None and self.thread.isRunning():
-                    self.sortviz.set_running(on)
-                elif not on:
-                    self.sortviz.set_running(False)
-            except Exception:
-                pass
-
-        self.chk_sortviz.stateChanged.connect(lambda _: _toggle_sortviz())
 
         # Current file preview
         self.image_label = QLabel("Start a run to see the photo or video currently being processed.")
@@ -956,7 +930,6 @@ class MediaSorter(QMainWindow):
         preview_column = QVBoxLayout()
         preview_column.addWidget(status_box)
         preview_column.addWidget(self.image_box, 1)
-        preview_column.addWidget(self.sortviz_box)
         preview_column.addStretch(1)
 
         sidebar_column = QVBoxLayout()
@@ -1022,7 +995,6 @@ class MediaSorter(QMainWindow):
             self.chk_interactive,
             self.chk_people,
             self.chk_trial,
-            self.chk_sortviz,
         ):
             checkbox.stateChanged.connect(lambda _=None: self._update_run_summary())
         _sync_structure_ui()
@@ -1080,7 +1052,6 @@ class MediaSorter(QMainWindow):
             "focus_view": str(getattr(self, "_active_focus_view", "setup") or "setup"),
             "show_advanced": bool(self.chk_show_advanced.isChecked()),
             "convert_videos": bool(self.chk_convert_videos.isChecked()),
-            "sortviz": bool(self.chk_sortviz.isChecked()),
             "people_grouping": bool(self.chk_people.isChecked()),
             "ai_provider": str(self._selected_ai_provider_id() or ""),
             "ai_model": str(self._selected_ai_model_id() or ""),
@@ -1096,7 +1067,6 @@ class MediaSorter(QMainWindow):
         self.output_folder = str(settings.get("output_folder") or self.output_folder or "")
         self.chk_show_advanced.setChecked(bool(settings.get("show_advanced", self.chk_show_advanced.isChecked())))
         self.chk_convert_videos.setChecked(bool(settings.get("convert_videos", self.chk_convert_videos.isChecked())))
-        self.chk_sortviz.setChecked(bool(settings.get("sortviz", self.chk_sortviz.isChecked())))
         self.chk_people.setChecked(bool(settings.get("people_grouping", self.chk_people.isChecked())))
 
         structure_index = settings.get("structure_index")
@@ -1145,8 +1115,6 @@ class MediaSorter(QMainWindow):
             options.append("people grouping after sort")
         if self.chk_convert_videos.isChecked():
             options.append("video conversion")
-        if self.chk_sortviz.isChecked():
-            options.append("live stacks animation")
         return options
 
     def _set_focus_view(self, view_name: str) -> None:
@@ -1157,7 +1125,7 @@ class MediaSorter(QMainWindow):
 
         visible_by_view = {
             "setup": {"folder_box", "organization_box", "face_box", "status_box", "summary_box"},
-            "review": {"status_box", "image_box", "sortviz_box", "summary_box"},
+            "review": {"status_box", "image_box", "summary_box"},
             "search": {"search_box", "summary_box"},
             "tools": {"help_box", "advanced_box", "summary_box"},
             "all": {
@@ -1166,7 +1134,6 @@ class MediaSorter(QMainWindow):
                 "face_box",
                 "status_box",
                 "image_box",
-                "sortviz_box",
                 "summary_box",
                 "search_box",
                 "help_box",
@@ -1181,7 +1148,6 @@ class MediaSorter(QMainWindow):
             "face_box",
             "status_box",
             "image_box",
-            "sortviz_box",
             "summary_box",
             "search_box",
             "help_box",
@@ -1190,9 +1156,7 @@ class MediaSorter(QMainWindow):
             widget = getattr(self, attr, None)
             if widget is None:
                 continue
-            if attr == "sortviz_box":
-                should_show = attr in visible_names and bool(self.chk_sortviz.isChecked())
-            elif attr == "advanced_box":
+            if attr == "advanced_box":
                 should_show = attr in visible_names and bool(self.chk_show_advanced.isChecked())
             else:
                 should_show = attr in visible_names
@@ -2656,10 +2620,6 @@ class MediaSorter(QMainWindow):
     # ---------------------------
     def start_auto_thread(self, start_index=0):
         if int(start_index) >= len(self.files):
-            try:
-                self.sortviz.set_running(False)
-            except Exception:
-                pass
             self.status_label.setText("Status: Complete")
             self._set_current_media_placeholder(
                 "No remaining files",
@@ -2667,10 +2627,6 @@ class MediaSorter(QMainWindow):
             )
             QMessageBox.information(self, "Done", "No remaining files to process.")
             return
-        try:
-            self.sortviz.set_running(bool(self.chk_sortviz.isChecked()))
-        except Exception:
-            pass
         self._run_active = True
         self._run_phase = "Starting batch sort"
         self._update_run_summary()
@@ -2685,7 +2641,7 @@ class MediaSorter(QMainWindow):
         )
         self.thread.progress_signal.connect(self.progress.setValue)
         self.thread.status_signal.connect(self.on_auto_status)
-        self.thread.visual_signal.connect(self.on_sortviz_event)
+        self.thread.visual_signal.connect(self.on_visual_event)
         self.thread.done_signal.connect(self.auto_done)
         self.thread.start()
 
@@ -2706,7 +2662,7 @@ class MediaSorter(QMainWindow):
         except Exception:
             pass
 
-    def on_sortviz_event(self, payload: dict):
+    def on_visual_event(self, payload: dict):
         try:
             self._append_review_history_entry(payload or {})
         except Exception:
@@ -2859,10 +2815,6 @@ class MediaSorter(QMainWindow):
             pass
 
     def auto_done(self, counts):
-        try:
-            self.sortviz.set_running(False)
-        except Exception:
-            pass
         self._run_active = False
         self._run_phase = "Run complete"
         self.combo_category.setEnabled(False)

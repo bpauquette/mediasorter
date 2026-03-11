@@ -1831,9 +1831,14 @@ class TreemapDialog(QDialog):
         self._start_refresh()
 
     def _start_refresh(self) -> None:
-        if self.worker is not None and self.worker.isRunning():
-            self.worker.requestInterruption()
-            self.worker.wait(1000)
+        if self.worker is not None:
+            try:
+                if self.worker.isRunning():
+                    self.worker.requestInterruption()
+                    self.worker.wait(1000)
+            except RuntimeError:
+                pass
+            self.worker = None
 
         self._refresh_started_at = time.monotonic()
         self._last_summary = None
@@ -1844,8 +1849,12 @@ class TreemapDialog(QDialog):
         self.worker.finished_scan.connect(self._on_finished)
         self.worker.failed.connect(self._on_failed)
         self.worker.summary.connect(self._on_summary)
+        self.worker.finished.connect(self._clear_worker)
         self.worker.finished.connect(self.worker.deleteLater)
         self.worker.start()
+
+    def _clear_worker(self) -> None:
+        self.worker = None
 
     def _current_view_path(self) -> str:
         if self._zoom_paths:
