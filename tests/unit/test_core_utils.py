@@ -17,6 +17,13 @@ class CoreUtilsTests(unittest.TestCase):
         ids = {str(o.get("id")) for o in opts}
         self.assertIn("clip_vit_b32_openai", ids)
 
+    def test_outdoor_structure_is_in_category_catalog(self):
+        self.assertIn("outdoor structure", core.CATEGORIES)
+
+    def test_outdoor_structure_prompt_examples_include_deck(self):
+        prompts = core._category_prompt_examples("outdoor structure")
+        self.assertTrue(any("deck" in str(p).lower() for p in prompts))
+
     def test_set_ai_model_profile_updates_selected_model(self):
         old = core.get_ai_model_id()
         try:
@@ -113,6 +120,29 @@ class CoreUtilsTests(unittest.TestCase):
         )
         self.assertEqual(cat, "family photo")
         self.assertAlmostEqual(score, 0.424, places=3)
+
+    def test_classification_explanation_source_marks_model_predictions_as_category_templates(self):
+        source = core._classification_explanation_source(
+            {
+                "reason": "model_prediction",
+                "model": {
+                    "topk": [
+                        {"category": "family photo", "score": 0.88},
+                        {"category": "pet", "score": 0.44},
+                    ]
+                },
+            }
+        )
+        self.assertEqual(source, "category_template")
+
+    def test_classification_explanation_source_marks_model_not_ready_as_system_fallback(self):
+        source = core._classification_explanation_source(
+            {
+                "reason": "model_not_ready",
+                "model": {},
+            }
+        )
+        self.assertEqual(source, "system_fallback")
 
 
 if __name__ == "__main__":

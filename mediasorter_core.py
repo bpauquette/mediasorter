@@ -6,12 +6,20 @@ import shutil
 import subprocess
 import json
 import hashlib
+import sqlite3
 import threading
 import time
 from datetime import datetime
 import re
 import traceback
 import ctypes
+if os.name == "nt":
+    try:
+        import winreg  # type: ignore
+    except Exception:
+        winreg = None  # type: ignore
+else:
+    winreg = None  # type: ignore
 from PIL import Image, ImageFile
 ImageFile.LOAD_TRUNCATED_IMAGES = True  # handle truncated JPEGs
 import imageio.v3 as iio
@@ -71,6 +79,10 @@ DATA_DIR = _get_data_dir()
 SCRIPT_DIR = Path(__file__).resolve().parent
 LOG_FILE = DATA_DIR / "mediasorter.log"
 DECISION_LOG_FILE = DATA_DIR / "classification_decisions.jsonl"
+PRODUCT_EVENTS_FILE = DATA_DIR / "product_events.jsonl"
+SEARCH_INDEX_FILE = DATA_DIR / "media_search.sqlite3"
+_CLASSIFICATION_CONTEXT_BY_PATH = {}
+_CLASSIFICATION_CONTEXT_MAX = 2000
 
 def _log_line(msg: str) -> None:
     try:
@@ -98,8 +110,630 @@ def _append_decision_log(record: dict) -> None:
         pass
 
 
+def _pretty_category_name(cat: str) -> str:
+    try:
+        c = str(cat or "").strip()
+        if not c:
+            return "Uncategorized"
+        return c.replace("_", " ")
+    except Exception:
+        return "Uncategorized"
+
+
+def _coerce_topk_entries(topk_obj, max_items: int = 3) -> list[tuple[str, float]]:
+    out = []
+    try:
+        for item in list(topk_obj or []):
+            if isinstance(item, dict):
+                cat = str(item.get("category") or "").strip()
+                score = float(item.get("score") or 0.0)
+            elif isinstance(item, (list, tuple)) and len(item) >= 2:
+                cat = str(item[0] or "").strip()
+                score = float(item[1] or 0.0)
+            else:
+                continue
+            if not cat:
+                continue
+            out.append((cat, score))
+            if len(out) >= int(max_items):
+                break
+    except Exception:
+        return []
+    return out
+
+
+def _format_score(score) -> str:
+    try:
+        return f"{float(score):.2f}"
+    except Exception:
+        return "0.00"
+
+
+def _category_prompt_examples(category: str) -> list[str]:
+    c = str(category or "").strip().lower()
+    if not c:
+        return []
+    if c == "family photo":
+        return [
+            "a family photo",
+            "a photo of a person",
+            "a close-up portrait photo of a person",
+            "a portrait of a man",
+            "a portrait of a woman",
+            "a photo of people smiling",
+            "a candid photo of a person indoors",
+        ]
+    if c == "selfie":
+        return [
+            "a selfie",
+            "a selfie photo of a person",
+            "a front camera selfie",
+            "a selfie of a person indoors",
+            "a mirror selfie",
+        ]
+    if c == "pet":
+        return [
+            "a photo of a pet",
+            "a photo of a dog",
+            "a photo of a cat",
+            "a close-up photo of a dog",
+            "a close-up photo of a cat",
+            "a photo of an animal",
+        ]
+    if c == "shopping":
+        return [
+            "a photo of products on shelves in a store",
+            "a photo of items on store shelves",
+            "a photo of a grocery store aisle",
+            "a photo of a retail store aisle",
+            "a photo of a product display in a store",
+        ]
+    if c == "facebook download":
+        return [
+            "a photo downloaded from Facebook",
+            "a photo saved from the Facebook app",
+            "an image from a Facebook post",
+            "a photo from a Facebook feed",
+            "a re-shared image from Facebook",
+        ]
+    if c == "iphone screenshot":
+        return [
+            "an iPhone screenshot",
+            "a screenshot of an iPhone home screen with app icons",
+            "a screenshot of a mobile app interface on iOS",
+            "a screenshot of a phone screen with iOS UI",
+        ]
+    if c == "political meme":
+        return [
+            "a political meme",
+            "a meme about politics",
+            "a political meme with text over an image",
+            "a political infographic shared online",
+        ]
+    if c == "political cartoon":
+        return [
+            "a political cartoon",
+            "an editorial cartoon about politics",
+            "a satirical political cartoon",
+            "a comic strip about politics",
+        ]
+    if c == "screenshot":
+        return [
+            "a screenshot",
+            "a screenshot of a phone screen",
+            "a screenshot of an app interface",
+            "a screen capture of a website or app",
+        ]
+    if c == "document":
+        return [
+            "a photo of a document",
+            "a photo of printed text on paper",
+            "a scanned document",
+            "a photo of a receipt",
+            "a photo of a page of text",
+        ]
+    if c == "food":
+        return [
+            "a photo of food",
+            "a photo of a meal on a plate",
+            "a photo of a restaurant dish",
+            "a close-up photo of food",
+            "a photo of a drink",
+        ]
+    if c == "car":
+        return [
+            "a photo of a car",
+            "a photo of a vehicle",
+            "a photo of a car interior",
+            "a photo of a parked car outdoors",
+        ]
+    if c == "landscape":
+        return [
+            "a landscape photo",
+            "a photo of mountains",
+            "a photo of the ocean",
+            "a scenic outdoor landscape",
+        ]
+    if c == "outdoor structure":
+        return [
+            "a photo of an outdoor structure",
+            "a photo of a wooden deck",
+            "a photo of a porch or deck railing",
+            "a photo of a fence or railing outdoors",
+            "a photo of a patio, deck, or backyard structure",
+        ]
+    if c == "outdoor photo":
+        return [
+            "an outdoor photo",
+            "a photo taken outside",
+            "a photo of people outdoors",
+            "an outdoor snapshot",
+        ]
+    if c == "indoor photo":
+        return [
+            "an indoor photo",
+            "a photo taken inside",
+            "a photo of people indoors",
+            "an indoor snapshot",
+        ]
+    return [f"a photo of {c}", f"an image of {c}", f"a snapshot of {c}"]
+
+
+def _category_prompt_hints(category: str, max_items: int = 3) -> list[str]:
+    prompts = list(_category_prompt_examples(category) or [])
+
+    out = []
+    seen = set()
+    prefixes = (
+        "a close-up portrait photo of ",
+        "a close-up photo of ",
+        "a candid photo of ",
+        "a portrait of ",
+        "a screenshot of ",
+        "a photo taken while ",
+        "a photo taken ",
+        "a photo of ",
+        "an image of ",
+        "a snapshot of ",
+        "an outdoor ",
+        "an indoor ",
+    )
+
+    for raw in prompts:
+        txt = str(raw or "").strip()
+        if not txt:
+            continue
+        low = txt.lower()
+        for prefix in prefixes:
+            if low.startswith(prefix):
+                txt = txt[len(prefix):].strip()
+                low = txt.lower()
+                break
+        if low.startswith("a "):
+            txt = txt[2:].strip()
+        elif low.startswith("an "):
+            txt = txt[3:].strip()
+        txt = txt.strip(" .")
+        key = txt.casefold()
+        if not txt or key in seen:
+            continue
+        seen.add(key)
+        out.append(txt)
+        if len(out) >= int(max_items):
+            break
+    return out
+
+
+def _natural_language_join(parts: list[str]) -> str:
+    items = [str(p or "").strip() for p in list(parts or []) if str(p or "").strip()]
+    if not items:
+        return ""
+    if len(items) == 1:
+        return items[0]
+    if len(items) == 2:
+        return f"{items[0]} and {items[1]}"
+    return ", ".join(items[:-1]) + f", and {items[-1]}"
+
+
+def _category_cue_sentence(category: str, max_items: int = 3, prefix: str = "The clearest visual cues were") -> str:
+    cues = _category_prompt_hints(category, max_items=max_items)
+    if not cues:
+        return ""
+    return f"{prefix} {_natural_language_join(cues)}."
+
+
+def _category_hypothesis_blurb(final_cat: str, final_score: str, topk: list[tuple[str, float]] | None) -> str:
+    alternatives = [(c, s) for (c, s) in list(topk or []) if str(c) != str(final_cat)][:2]
+
+    parts = [f"The AI's strongest read was '{_pretty_category_name(final_cat)}' (score {final_score})."]
+    if alternatives:
+        parts.append(
+            " Other plausible reads were "
+            + ", ".join([f"'{_pretty_category_name(c)}' ({_format_score(s)})" for (c, s) in alternatives])
+            + "."
+        )
+    cue_sentence = _category_cue_sentence(final_cat, max_items=3)
+    if cue_sentence:
+        parts.append(f" {cue_sentence}")
+    return "".join(parts)
+
+
+def _build_classification_explanation(decision: dict) -> str:
+    reason = str((decision or {}).get("reason") or "")
+    final_cat = _pretty_category_name((decision or {}).get("final_category"))
+    final_score = _format_score((decision or {}).get("final_score"))
+    model = (decision or {}).get("model") if isinstance((decision or {}).get("model"), dict) else {}
+    topk = _coerce_topk_entries(model.get("topk"), max_items=3)
+    model_readout = _category_hypothesis_blurb(final_cat, final_score, topk)
+    final_cue_sentence = _category_cue_sentence(final_cat, max_items=3)
+
+    if reason == "user_correction":
+        return f"Used your previously confirmed label, so this image was placed in '{final_cat}'."
+    if reason == "user_live_override":
+        prev_cat = _pretty_category_name((decision or {}).get("previous_category"))
+        return (
+            f"You changed this file from '{prev_cat}' to '{final_cat}', so MediaSorter moved it to the updated destination."
+        )
+    if reason == "image_load_failed":
+        return "The image could not be read reliably, so it was placed in 'Uncategorized'."
+    if reason == "heuristics_only_provider":
+        return (
+            f"AI was disabled for this run, so filename/metadata heuristics were used and the image was placed in '{final_cat}'."
+        )
+    if reason == "heuristics_only_provider_no_match":
+        return "AI was disabled and no strong heuristic match was found, so the image was placed in 'Uncategorized'."
+    if reason == "model_not_ready":
+        return "The AI model was not ready, so the image was placed in 'Uncategorized'."
+    if reason == "face_override_pet_to_family_photo":
+        frac = 0.0
+        try:
+            frac = float((decision or {}).get("face_fraction") or 0.0)
+        except Exception:
+            frac = 0.0
+        pct = f"{frac * 100.0:.1f}%"
+        return (
+            "The model initially leaned toward 'pet', but a prominent detected face "
+            f"({pct} of the frame) suggested a portrait, so it was placed in 'family photo'."
+        )
+    if reason == "heuristic_override_facebook_download":
+        base = _pretty_category_name((decision or {}).get("heuristic_eligible_from"))
+        cue_sentence = _category_cue_sentence(base or final_cat, max_items=3)
+        body = (
+            f"The AI result was in a screenshot/document-style bucket ('{base}'), and filename/metadata looked like a Facebook export, "
+            "so it was placed in 'facebook download'."
+        )
+        return f"{cue_sentence} {body}".strip() if cue_sentence else body
+    if reason == "heuristic_override_screenshot_family":
+        base = _pretty_category_name((decision or {}).get("heuristic_eligible_from"))
+        cue_sentence = _category_cue_sentence(final_cat or base, max_items=3)
+        body = (
+            f"The AI result was in the screenshot/document family ('{base}'), and screen-capture heuristics matched, "
+            f"so it was placed in '{final_cat}'."
+        )
+        return f"{cue_sentence} {body}".strip() if cue_sentence else body
+
+    noise = model.get("noise_adjustment") if isinstance(model, dict) else {}
+    if isinstance(noise, dict) and bool(noise.get("applied")):
+        from_cat = _pretty_category_name(noise.get("from_category"))
+        to_cat = _pretty_category_name(noise.get("to_category"))
+        return (
+            f"The image's visual patterns were a near tie, so a stability rule switched the category from '{from_cat}' to '{to_cat}'."
+            f" {model_readout}"
+        )
+
+    if topk:
+        return model_readout
+
+    if final_cue_sentence:
+        return f"The AI placed this image in '{final_cat}' with score {final_score}. {final_cue_sentence}"
+    return f"The AI placed this image in '{final_cat}' with score {final_score}."
+
+
+def _classification_explanation_source(decision: dict) -> str:
+    reason = str((decision or {}).get("reason") or "").strip().lower()
+    model = (decision or {}).get("model") if isinstance((decision or {}).get("model"), dict) else {}
+    topk = _coerce_topk_entries(model.get("topk"), max_items=3)
+
+    if reason in ("user_correction", "user_live_override"):
+        return "user_override"
+    if reason in ("image_load_failed", "heuristics_only_provider_no_match", "model_not_ready"):
+        return "system_fallback"
+    if reason.startswith("heuristic_override_") or reason in (
+        "heuristics_only_provider",
+        "face_override_pet_to_family_photo",
+    ):
+        return "rule_based_override"
+    if reason == "model_prediction" and topk:
+        return "category_template"
+    if topk:
+        return "category_template"
+    return "unknown"
+
+
+def _cache_classification_context(decision: dict) -> None:
+    try:
+        path = str((decision or {}).get("file_path") or "").strip()
+        if not path:
+            return
+        _CLASSIFICATION_CONTEXT_BY_PATH[path] = {
+            "final_category": str((decision or {}).get("final_category") or "Uncategorized"),
+            "final_score": float((decision or {}).get("final_score") or 0.0),
+            "reason": str((decision or {}).get("reason") or ""),
+            "explanation": str((decision or {}).get("explanation") or ""),
+            "explanation_source": str((decision or {}).get("explanation_source") or ""),
+        }
+        while len(_CLASSIFICATION_CONTEXT_BY_PATH) > int(_CLASSIFICATION_CONTEXT_MAX):
+            try:
+                _CLASSIFICATION_CONTEXT_BY_PATH.pop(next(iter(_CLASSIFICATION_CONTEXT_BY_PATH)))
+            except Exception:
+                break
+    except Exception:
+        pass
+
+
+def _finalize_classification_decision(decision: dict) -> None:
+    try:
+        if not isinstance(decision, dict):
+            return
+        decision["explanation"] = _build_classification_explanation(decision)
+        decision["explanation_source"] = _classification_explanation_source(decision)
+        _cache_classification_context(decision)
+        _append_decision_log(decision)
+    except Exception:
+        _append_decision_log(decision)
+
+
 def get_decision_log_path() -> str:
     return str(DECISION_LOG_FILE)
+
+
+def get_search_index_path() -> str:
+    return str(SEARCH_INDEX_FILE)
+
+
+def _connect_search_index() -> sqlite3.Connection:
+    SEARCH_INDEX_FILE.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(SEARCH_INDEX_FILE))
+    conn.row_factory = sqlite3.Row
+    try:
+        conn.execute("PRAGMA journal_mode=WAL")
+    except Exception:
+        pass
+    return conn
+
+
+def _ensure_search_index_schema(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS media_search_index (
+            result_path TEXT PRIMARY KEY,
+            source_path TEXT NOT NULL DEFAULT '',
+            file_name TEXT NOT NULL DEFAULT '',
+            category TEXT NOT NULL DEFAULT '',
+            explanation TEXT NOT NULL DEFAULT '',
+            search_text TEXT NOT NULL DEFAULT '',
+            flow TEXT NOT NULL DEFAULT '',
+            file_kind TEXT NOT NULL DEFAULT '',
+            tokens_json TEXT NOT NULL DEFAULT '',
+            updated_at TEXT NOT NULL DEFAULT ''
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_media_search_updated_at ON media_search_index(updated_at DESC)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_media_search_category ON media_search_index(category)"
+    )
+    conn.commit()
+
+
+def _search_terms_for_category(category: str) -> list[str]:
+    cat = str(category or "").strip()
+    if not cat:
+        return []
+    prompts = [str(p).strip() for p in (_category_prompt_examples(cat) or []) if str(p).strip()]
+    return prompts if prompts else [cat, f"a photo of {cat}", f"an image of {cat}"]
+
+
+def _build_search_document(record: dict) -> tuple[str, str, str]:
+    result_path = str((record or {}).get("dest_path") or (record or {}).get("source_path") or "").strip()
+    source_path = str((record or {}).get("source_path") or "").strip()
+    file_name = str((record or {}).get("file_name") or os.path.basename(result_path or source_path or "")).strip()
+    category = str(
+        (record or {}).get("classification_final_category")
+        or (record or {}).get("category")
+        or "Uncategorized"
+    ).strip() or "Uncategorized"
+    explanation = str((record or {}).get("classification_explanation") or "").strip()
+    reason = str((record or {}).get("classification_reason") or "").strip()
+    flow = str((record or {}).get("flow") or "").strip()
+    tokens = (record or {}).get("tokens") if isinstance((record or {}).get("tokens"), dict) else {}
+
+    token_values = []
+    for key, value in dict(tokens or {}).items():
+        key_txt = str(key or "").strip()
+        value_txt = str(value or "").strip()
+        if not key_txt and not value_txt:
+            continue
+        token_values.append(f"{key_txt} {value_txt}".strip())
+
+    file_kind = "video" if str(category).strip().lower() == "videos" else "image"
+    kind_terms = "video movie clip" if file_kind == "video" else "image photo picture"
+    prompt_terms = " ".join(_search_terms_for_category(category))
+
+    parts = [
+        file_name,
+        category,
+        explanation,
+        reason,
+        flow,
+        source_path,
+        result_path,
+        kind_terms,
+        prompt_terms,
+        " ".join(token_values),
+    ]
+    raw_text = " ".join([p for p in parts if p]).strip()
+    search_text = re.sub(r"\s+", " ", raw_text).strip().lower()
+    return category, explanation, search_text
+
+
+def _upsert_search_index_record(conn: sqlite3.Connection, record: dict) -> bool:
+    result_path = str((record or {}).get("dest_path") or (record or {}).get("source_path") or "").strip()
+    if not result_path:
+        return False
+
+    source_path = str((record or {}).get("source_path") or "").strip()
+    file_name = str((record or {}).get("file_name") or os.path.basename(result_path)).strip()
+    flow = str((record or {}).get("flow") or "").strip()
+    tokens = (record or {}).get("tokens") if isinstance((record or {}).get("tokens"), dict) else {}
+    file_kind = "video" if str((record or {}).get("category") or "").strip().lower() == "videos" else "image"
+    category, explanation, search_text = _build_search_document(record)
+
+    conn.execute(
+        """
+        INSERT OR REPLACE INTO media_search_index (
+            result_path,
+            source_path,
+            file_name,
+            category,
+            explanation,
+            search_text,
+            flow,
+            file_kind,
+            tokens_json,
+            updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            result_path,
+            source_path,
+            file_name,
+            category,
+            explanation,
+            search_text,
+            flow,
+            file_kind,
+            json.dumps(tokens, ensure_ascii=False, sort_keys=True),
+            datetime.now().isoformat(timespec="seconds"),
+        ),
+    )
+    return True
+
+
+def index_search_record(record: dict) -> bool:
+    try:
+        with _connect_search_index() as conn:
+            _ensure_search_index_schema(conn)
+            changed = _upsert_search_index_record(conn, record)
+            conn.commit()
+            return bool(changed)
+    except Exception:
+        return False
+
+
+def rebuild_search_index_from_decision_log() -> dict:
+    stats = {
+        "indexed": 0,
+        "seen_sort_records": 0,
+        "db_path": str(SEARCH_INDEX_FILE),
+        "log_path": str(DECISION_LOG_FILE),
+    }
+    try:
+        with _connect_search_index() as conn:
+            _ensure_search_index_schema(conn)
+            conn.execute("DELETE FROM media_search_index")
+
+            if DECISION_LOG_FILE.exists():
+                with open(DECISION_LOG_FILE, "r", encoding="utf-8") as f:
+                    for line in f:
+                        line = str(line or "").strip()
+                        if not line:
+                            continue
+                        try:
+                            record = json.loads(line)
+                        except Exception:
+                            continue
+                        if str((record or {}).get("event") or "") != "sort_destination":
+                            continue
+                        stats["seen_sort_records"] += 1
+                        if _upsert_search_index_record(conn, record):
+                            stats["indexed"] += 1
+            conn.commit()
+    except Exception:
+        pass
+    return stats
+
+
+def search_media_index(query: str, limit: int = 50) -> list[dict]:
+    out = []
+    q = str(query or "").strip().lower()
+    tokens = [t for t in re.split(r"\s+", q) if t]
+    try:
+        needs_rebuild = not SEARCH_INDEX_FILE.exists()
+        if not needs_rebuild:
+            try:
+                with _connect_search_index() as probe:
+                    _ensure_search_index_schema(probe)
+                    row = probe.execute("SELECT COUNT(*) AS c FROM media_search_index").fetchone()
+                    needs_rebuild = int((row["c"] if row is not None else 0) or 0) <= 0
+            except Exception:
+                needs_rebuild = True
+
+        if needs_rebuild:
+            rebuild_search_index_from_decision_log()
+
+        with _connect_search_index() as conn:
+            _ensure_search_index_schema(conn)
+            sql = (
+                "SELECT result_path, source_path, file_name, category, explanation, flow, file_kind, updated_at "
+                "FROM media_search_index"
+            )
+            params = []
+            if tokens:
+                clauses = []
+                for token in tokens:
+                    clauses.append("search_text LIKE ?")
+                    params.append(f"%{token}%")
+                sql += " WHERE " + " AND ".join(clauses)
+            sql += " ORDER BY updated_at DESC, file_name COLLATE NOCASE ASC LIMIT ?"
+            params.append(max(1, min(int(limit or 50), 200)))
+
+            rows = conn.execute(sql, params).fetchall()
+            for row in rows:
+                out.append(
+                    {
+                        "path": str(row["result_path"] or ""),
+                        "source_path": str(row["source_path"] or ""),
+                        "file_name": str(row["file_name"] or ""),
+                        "category": str(row["category"] or ""),
+                        "explanation": str(row["explanation"] or ""),
+                        "flow": str(row["flow"] or ""),
+                        "file_kind": str(row["file_kind"] or ""),
+                        "updated_at": str(row["updated_at"] or ""),
+                    }
+                )
+    except Exception:
+        return []
+    return out
+
+
+def log_product_event(event: str, data: dict | None = None) -> None:
+    """Append lightweight product/UX telemetry events to local JSONL."""
+    try:
+        if not event:
+            return
+        payload = {
+            "timestamp": datetime.now().isoformat(timespec="seconds"),
+            "event": str(event),
+            "data": dict(data or {}),
+        }
+        PRODUCT_EVENTS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        with open(PRODUCT_EVENTS_FILE, "a", encoding="utf-8") as f:
+            f.write(json.dumps(payload, ensure_ascii=False) + "\n")
+    except Exception:
+        pass
 
 
 def _log_sort_destination_decision(
@@ -122,7 +756,132 @@ def _log_sort_destination_decision(
         "dest_dir": str(dest_dir or ""),
         "dest_path": str(dest_path or ""),
     }
+    try:
+        ctx = _CLASSIFICATION_CONTEXT_BY_PATH.get(str(source_path or ""))
+        if isinstance(ctx, dict):
+            payload["classification_reason"] = str(ctx.get("reason") or "")
+            payload["classification_explanation"] = str(ctx.get("explanation") or "")
+            payload["classification_explanation_source"] = str(ctx.get("explanation_source") or "")
+            payload["classification_final_category"] = str(ctx.get("final_category") or payload["category"])
+            payload["classification_final_score"] = float(ctx.get("final_score") or 0.0)
+    except Exception:
+        pass
+    if "classification_explanation" not in payload:
+        try:
+            if str(category or "").strip().lower() == "videos":
+                payload["classification_explanation"] = "This file was detected as a video and placed in the Videos destination."
+            else:
+                payload["classification_explanation"] = (
+                    f"The image was sorted into '{_pretty_category_name(category)}' based on the current classification result."
+                )
+        except Exception:
+            pass
+    if "classification_explanation_source" not in payload:
+        try:
+            if str(category or "").strip().lower() == "videos":
+                payload["classification_explanation_source"] = "rule_based_video"
+            else:
+                payload["classification_explanation_source"] = "unknown"
+        except Exception:
+            pass
     _append_decision_log(payload)
+    try:
+        index_search_record(payload)
+    except Exception:
+        pass
+
+
+def apply_live_category_override(
+    source_path: str,
+    current_dest_path: str,
+    new_category: str,
+    output_folder: str,
+    structure_pattern: str = "{category}",
+    previous_category: str = "",
+) -> dict:
+    src = str(source_path or "").strip()
+    current_dest = str(current_dest_path or "").strip()
+    out_root = str(output_folder or "").strip()
+    new_cat = str(new_category or "").strip()
+    prev_cat = str(previous_category or "").strip() or "Uncategorized"
+
+    if not src:
+        raise ValueError("Missing source file path.")
+    if not out_root:
+        raise ValueError("Missing output folder.")
+    if not new_cat:
+        raise ValueError("Choose a category first.")
+    if new_cat not in CATEGORIES:
+        raise ValueError(f"Unknown category: {new_cat}")
+    if str(src).lower().endswith(VIDEO_EXT):
+        raise ValueError("Live category override is only supported for image files.")
+
+    img = load_image_for_ai(src)
+    toks = _structure_tokens(new_cat, src, img)
+    dest_dir = _render_structure(out_root, structure_pattern or "{category}", toks)
+    file_name = os.path.basename(current_dest or src)
+    preferred_dest = os.path.join(dest_dir, file_name)
+
+    same_dest = False
+    try:
+        same_dest = os.path.normcase(os.path.abspath(preferred_dest)) == os.path.normcase(os.path.abspath(current_dest))
+    except Exception:
+        same_dest = preferred_dest == current_dest
+
+    if same_dest and current_dest:
+        final_dest = current_dest
+    else:
+        final_dest = _unique_dest_path(dest_dir, file_name)
+        if current_dest and os.path.exists(current_dest):
+            os.makedirs(os.path.dirname(final_dest), exist_ok=True)
+            shutil.move(current_dest, final_dest)
+        else:
+            os.makedirs(os.path.dirname(final_dest), exist_ok=True)
+            shutil.copy2(src, final_dest)
+
+    img_hash = hash_image(src)
+    if img_hash:
+        CORRECTIONS[img_hash] = new_cat
+        try:
+            _atomic_write_json(CORRECTION_FILE, CORRECTIONS)
+        except Exception:
+            pass
+
+    try:
+        if img is not None:
+            _old_cat, _old_score, emb = _predict_category_from_pil(img)
+            _update_prototype(new_cat, emb)
+    except Exception:
+        pass
+
+    _CLASSIFICATION_CONTEXT_BY_PATH[src] = {
+        "final_category": new_cat,
+        "final_score": 1.0,
+        "reason": "user_live_override",
+        "explanation": (
+            f"You changed this file from '{_pretty_category_name(prev_cat)}' to "
+            f"'{_pretty_category_name(new_cat)}', so MediaSorter moved it to the updated destination."
+        ),
+        "previous_category": prev_cat,
+    }
+
+    _log_sort_destination_decision(
+        source_path=src,
+        category=new_cat,
+        structure_pattern=structure_pattern or "{category}",
+        tokens=toks,
+        dest_dir=dest_dir,
+        dest_path=final_dest,
+        flow="live_override",
+    )
+
+    return {
+        "source_path": src,
+        "dest_path": final_dest,
+        "category": new_cat,
+        "previous_category": prev_cat,
+        "explanation": str(_CLASSIFICATION_CONTEXT_BY_PATH[src].get("explanation") or ""),
+    }
 
 
 def _runtime_binary_dirs() -> list:
@@ -270,7 +1029,233 @@ PEOPLE_FILE = DATA_DIR / "people_db.json"
 IMAGE_EXT = ('.jpg', '.jpeg', '.png', '.bmp', '.webp', '.tiff', '.heic', '.heif')
 VIDEO_EXT = ('.mov', '.m4v', '.mp4', '.hevc')
 
-PAYPAL_LINK = "https://www.paypal.com/donate"
+# Quick monetization support:
+# point this at a hosted checkout page (Gumroad, Stripe Payment Link, etc.).
+def _read_support_url_from_runtime_files() -> str:
+    candidates = []
+    try:
+        candidates.append(Path(sys.executable).resolve().parent / "support_url.txt")
+    except Exception:
+        pass
+    try:
+        candidates.append(Path(__file__).resolve().parent / "support_url.txt")
+    except Exception:
+        pass
+
+    seen = set()
+    for p in candidates:
+        try:
+            key = str(p.resolve()).lower()
+            if key in seen or not p.exists():
+                continue
+            seen.add(key)
+            line = (p.read_text(encoding="utf-8", errors="ignore") or "").strip()
+            if line:
+                return line.splitlines()[0].strip()
+        except Exception:
+            continue
+    return ""
+
+
+DEFAULT_SUPPORT_URL = "https://github.com/bpauquette/mediasorter/releases/latest"
+SUPPORT_URL = (
+    os.environ.get("MEDIASORTER_SUPPORT_URL")
+    or os.environ.get("MEDIASORTER_PAYMENT_URL")
+    or _read_support_url_from_runtime_files()
+    or DEFAULT_SUPPORT_URL
+).strip()
+
+REPO_MAIN_URL = "https://github.com/bpauquette/mediasorter/blob/main"
+LEGAL_INFO_URL = (
+    os.environ.get("MEDIASORTER_LEGAL_URL")
+    or f"{REPO_MAIN_URL}/LEGAL_MARKETING_RECOMMENDATIONS.md"
+).strip()
+PRIVACY_URL = (
+    os.environ.get("MEDIASORTER_PRIVACY_URL")
+    or f"{REPO_MAIN_URL}/PRIVACY.md"
+).strip()
+TERMS_URL = (
+    os.environ.get("MEDIASORTER_TERMS_URL")
+    or f"{REPO_MAIN_URL}/TERMS.md"
+).strip()
+REFUND_URL = (
+    os.environ.get("MEDIASORTER_REFUND_URL")
+    or f"{REPO_MAIN_URL}/REFUND_POLICY.md"
+).strip()
+
+SEQUOIAVIEW_URL = (
+    os.environ.get("MEDIASORTER_SEQUOIAVIEW_URL")
+    or "https://www.win.tue.nl/sequoiaview/"
+).strip()
+
+
+def _clean_exe_candidate_path(raw_path: str) -> str:
+    p = str(raw_path or "").strip().strip('"')
+    if not p:
+        return ""
+    low = p.lower()
+    if ".exe" in low:
+        p = p[: low.find(".exe") + 4]
+    return p.strip().strip('"')
+
+
+def _append_sequoiaview_candidate(candidates: list[str], seen: set[str], raw_path) -> None:
+    try:
+        p = _clean_exe_candidate_path(str(raw_path or ""))
+        if not p:
+            return
+        p = os.path.expandvars(os.path.expanduser(p))
+        key = p.lower()
+        if key in seen:
+            return
+        seen.add(key)
+        candidates.append(p)
+    except Exception:
+        return
+
+
+def _sequoiaview_paths_from_registry() -> list[str]:
+    out = []
+    if os.name != "nt" or winreg is None:
+        return out
+
+    seen = set()
+    uninstall_roots = [
+        r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall",
+        r"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall",
+    ]
+    app_path_roots = [
+        r"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\SequoiaView.exe",
+        r"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\App Paths\SequoiaView.exe",
+    ]
+    roots = [winreg.HKEY_CURRENT_USER, winreg.HKEY_LOCAL_MACHINE]
+
+    for root in roots:
+        for base in uninstall_roots:
+            try:
+                with winreg.OpenKey(root, base) as uninstall_key:
+                    subkey_count, _, _ = winreg.QueryInfoKey(uninstall_key)
+                    for i in range(subkey_count):
+                        try:
+                            subkey_name = winreg.EnumKey(uninstall_key, i)
+                            with winreg.OpenKey(uninstall_key, subkey_name) as app_key:
+                                try:
+                                    display_name = str(winreg.QueryValueEx(app_key, "DisplayName")[0] or "")
+                                except Exception:
+                                    display_name = ""
+                                low_name = display_name.lower()
+                                if "sequoia" not in low_name or "view" not in low_name:
+                                    continue
+
+                                try:
+                                    install_location = str(winreg.QueryValueEx(app_key, "InstallLocation")[0] or "")
+                                except Exception:
+                                    install_location = ""
+                                if install_location:
+                                    if ".exe" in install_location.lower():
+                                        _append_sequoiaview_candidate(out, seen, install_location)
+                                    else:
+                                        _append_sequoiaview_candidate(
+                                            out,
+                                            seen,
+                                            os.path.join(install_location, "SequoiaView.exe"),
+                                        )
+
+                                try:
+                                    display_icon = str(winreg.QueryValueEx(app_key, "DisplayIcon")[0] or "")
+                                except Exception:
+                                    display_icon = ""
+                                if display_icon:
+                                    _append_sequoiaview_candidate(out, seen, display_icon)
+                        except Exception:
+                            continue
+            except Exception:
+                continue
+
+        for app_path_key in app_path_roots:
+            try:
+                with winreg.OpenKey(root, app_path_key) as app_key:
+                    try:
+                        exe_path = str(winreg.QueryValueEx(app_key, "")[0] or "")
+                    except Exception:
+                        exe_path = ""
+                    if exe_path:
+                        _append_sequoiaview_candidate(out, seen, exe_path)
+                    try:
+                        base_path = str(winreg.QueryValueEx(app_key, "Path")[0] or "")
+                    except Exception:
+                        base_path = ""
+                    if base_path:
+                        _append_sequoiaview_candidate(out, seen, os.path.join(base_path, "SequoiaView.exe"))
+            except Exception:
+                continue
+
+    return out
+
+
+def get_sequoiaview_search_paths() -> list[str]:
+    candidates = []
+    seen = set()
+
+    _append_sequoiaview_candidate(candidates, seen, shutil.which("SequoiaView.exe"))
+    _append_sequoiaview_candidate(candidates, seen, shutil.which("SequoiaView"))
+    _append_sequoiaview_candidate(candidates, seen, shutil.which("Sequoia.exe"))
+    _append_sequoiaview_candidate(candidates, seen, shutil.which("Sequoia"))
+
+    program_files = os.environ.get("ProgramFiles") or r"C:\Program Files"
+    program_files_x86 = os.environ.get("ProgramFiles(x86)") or r"C:\Program Files (x86)"
+    local_app_data = os.environ.get("LocalAppData") or ""
+
+    _append_sequoiaview_candidate(candidates, seen, os.path.join(program_files, "SequoiaView", "SequoiaView.exe"))
+    _append_sequoiaview_candidate(candidates, seen, os.path.join(program_files_x86, "SequoiaView", "SequoiaView.exe"))
+    _append_sequoiaview_candidate(candidates, seen, os.path.join(program_files, "SequoiaView", "Sequoia.exe"))
+    _append_sequoiaview_candidate(candidates, seen, os.path.join(program_files_x86, "SequoiaView", "Sequoia.exe"))
+    if local_app_data:
+        _append_sequoiaview_candidate(
+            candidates,
+            seen,
+            os.path.join(local_app_data, "Programs", "SequoiaView", "SequoiaView.exe"),
+        )
+        _append_sequoiaview_candidate(
+            candidates,
+            seen,
+            os.path.join(local_app_data, "Programs", "SequoiaView", "Sequoia.exe"),
+        )
+        _append_sequoiaview_candidate(candidates, seen, os.path.join(local_app_data, "SequoiaView", "SequoiaView.exe"))
+        _append_sequoiaview_candidate(candidates, seen, os.path.join(local_app_data, "SequoiaView", "Sequoia.exe"))
+
+    for reg_path in _sequoiaview_paths_from_registry():
+        _append_sequoiaview_candidate(candidates, seen, reg_path)
+
+    return candidates
+
+
+def find_sequoiaview_executable() -> str:
+    for p in get_sequoiaview_search_paths():
+        try:
+            if Path(p).is_file():
+                return str(Path(p).resolve())
+        except Exception:
+            continue
+    return ""
+
+
+def launch_sequoiaview(target_path: str | None = None) -> tuple[bool, str]:
+    exe_path = find_sequoiaview_executable()
+    if not exe_path:
+        return False, "SequoiaView was not found in common install locations."
+    try:
+        args = [exe_path]
+        target = str(target_path or "").strip()
+        if target:
+            args.append(target)
+        if os.name == "nt":
+            subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        else:
+            subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return True, exe_path
+    except Exception as e:
+        return False, f"Found SequoiaView at '{exe_path}', but launch failed: {e}"
 
 
 def get_heic_support_status() -> dict:
@@ -394,6 +1379,7 @@ DEFAULT_CATEGORIES = [
     "screenshot",
     "iphone screenshot",
     "car",
+    "outdoor structure",
     "indoor photo",
     "outdoor photo",
 ]
@@ -416,6 +1402,11 @@ _CATEGORY_ALIASES = {
     "fb image": "facebook download",
     "outdoor": "outdoor photo",
     "outdoors": "outdoor photo",
+    "deck": "outdoor structure",
+    "porch": "outdoor structure",
+    "patio": "outdoor structure",
+    "fence": "outdoor structure",
+    "railing": "outdoor structure",
     "indoor": "indoor photo",
     "indoors": "indoor photo",
 }
@@ -426,6 +1417,7 @@ _REQUIRED_CATEGORIES = (
     "iphone screenshot",
     "political meme",
     "political cartoon",
+    "outdoor structure",
 )
 
 _GENERIC_CATEGORIES = {"family photo", "selfie", "indoor photo", "outdoor photo"}
@@ -856,6 +1848,12 @@ def _prompts_for_category(cat):
         return [
             "a landscape photo", "a photo of mountains", "a photo of the ocean",
             "a scenic outdoor landscape", "a wide outdoor scenery photo",
+        ]
+    if c == "outdoor structure":
+        return [
+            "a photo of an outdoor structure", "a photo of a wooden deck",
+            "a photo of a porch or deck railing", "a photo of a fence or railing outdoors",
+            "a photo of a patio, deck, or backyard structure",
         ]
     if c == "outdoor photo":
         return [
@@ -2814,7 +3812,7 @@ def _predict_category_internal(image_path, pil_img=None):
                     "final_score": 1.0,
                 }
             )
-            _append_decision_log(decision)
+            _finalize_classification_decision(decision)
             return chosen, 1.0, None
 
     if pil_img is None:
@@ -2838,7 +3836,7 @@ def _predict_category_internal(image_path, pil_img=None):
                         pass
         print(f"Warning: Failed to load {image_path}")
         decision.update({"final_category": "Uncategorized", "final_score": 0.0})
-        _append_decision_log(decision)
+        _finalize_classification_decision(decision)
         return "Uncategorized", 0.0, None
 
     if provider_id == AI_PROVIDER_NONE:
@@ -2852,7 +3850,7 @@ def _predict_category_internal(image_path, pil_img=None):
                     "final_score": 1.0,
                 }
             )
-            _append_decision_log(decision)
+            _finalize_classification_decision(decision)
             return override, 1.0, None
         decision.update(
             {
@@ -2861,7 +3859,7 @@ def _predict_category_internal(image_path, pil_img=None):
                 "final_score": 0.0,
             }
         )
-        _append_decision_log(decision)
+        _finalize_classification_decision(decision)
         return "Uncategorized", 0.0, None
 
     if not _MODEL_READY:
@@ -2873,7 +3871,7 @@ def _predict_category_internal(image_path, pil_img=None):
                 "final_score": 0.0,
             }
         )
-        _append_decision_log(decision)
+        _finalize_classification_decision(decision)
         return "Uncategorized", 0.0, None
 
     cat, score, emb, model_details = _predict_category_from_pil(
@@ -2898,7 +3896,7 @@ def _predict_category_internal(image_path, pil_img=None):
                     "final_score": 1.0,
                 }
             )
-            _append_decision_log(decision)
+            _finalize_classification_decision(decision)
             return "family photo", 1.0, emb
 
     # Conservative source/screenshot bucketing: only override when the model already thinks
@@ -2917,7 +3915,7 @@ def _predict_category_internal(image_path, pil_img=None):
                     "final_score": 1.0,
                 }
             )
-            _append_decision_log(decision)
+            _finalize_classification_decision(decision)
             return "facebook download", 1.0, emb
     elif override in ("iphone screenshot", "screenshot"):
         if cat in ("screenshot", "document", "iphone screenshot"):
@@ -2931,7 +3929,7 @@ def _predict_category_internal(image_path, pil_img=None):
                     "final_score": 1.0,
                 }
             )
-            _append_decision_log(decision)
+            _finalize_classification_decision(decision)
             return want, 1.0, emb
 
     decision.update(
@@ -2941,7 +3939,7 @@ def _predict_category_internal(image_path, pil_img=None):
             "final_score": float(score),
         }
     )
-    _append_decision_log(decision)
+    _finalize_classification_decision(decision)
     return cat, score, emb
 
 def predict_category(image_path):
@@ -2994,7 +3992,7 @@ class AutoProcessThread(QThread):
     progress_signal = Signal(int)
     status_signal = Signal(str)
     done_signal = Signal(dict)
-    visual_signal = Signal(str, str, bool)  # file_path, category, is_video
+    visual_signal = Signal(dict)  # live review payload for the current file
 
     def __init__(
         self,
@@ -3287,7 +4285,16 @@ class AutoProcessThread(QThread):
                         )
                     counts["videos"] +=1
                     try:
-                        self.visual_signal.emit(path, "Videos", True)
+                        self.visual_signal.emit(
+                            {
+                                "source_path": path,
+                                "dest_path": str(mp4_path if self.convert_videos else dest),
+                                "category": "Videos",
+                                "is_video": True,
+                                "explanation": "This file was detected as a video and placed in the Videos destination.",
+                                "explanation_source": "rule_based_video",
+                            }
+                        )
                     except Exception:
                         pass
 
@@ -3316,7 +4323,20 @@ class AutoProcessThread(QThread):
                     )
                     counts["images"] +=1
                     try:
-                        self.visual_signal.emit(path, predicted, False)
+                        ctx = _CLASSIFICATION_CONTEXT_BY_PATH.get(str(path or "")) or {}
+                        self.visual_signal.emit(
+                            {
+                                "source_path": path,
+                                "dest_path": str(dest),
+                                "category": str(predicted),
+                                "is_video": False,
+                                "explanation_source": str(ctx.get("explanation_source") or "unknown"),
+                                "explanation": str(
+                                    ctx.get("explanation")
+                                    or f"The image was sorted into '{_pretty_category_name(predicted)}' based on the current classification result."
+                                ),
+                            }
+                        )
                     except Exception:
                         pass
 

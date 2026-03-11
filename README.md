@@ -1,89 +1,66 @@
 # MediaSorter
 
-Desktop photo/video sorter with optional runtime AI providers.
+MediaSorter is a Windows desktop app that organizes photos and videos into clean folder structures using local-first processing.
 
-## What It Does
+## Windows Elevation
 
-- Pick an input folder and an output folder
-- Supports runtime AI providers:
-  - `none` (heuristics-only, no heavy ML packages)
-  - `clip_local` (local CLIP via `torch` + `open_clip_torch`)
-- Optional interactive mode to confirm/override categories
-- Learns from your confirmations (keeps per-category embedding prototypes)
-- Optional video conversion to MP4 via HandBrakeCLI
+- Development launches self-elevate on Windows before starting the app.
+- Bundled Windows executables are built with a UAC manifest that requests administrator rights.
 
-## Run (Windows)
+## Product Focus
 
-```powershell
-# From the repo root:
-.\run_gui.cmd
-```
+- Fast media organization for large personal libraries
+- Simple default workflow for non-technical users
+- Basic mode by default with optional advanced controls for power users
+- Face identification can run in pass one or later pass
+- Built-in trial mode before purchase
 
-`run_gui.cmd` handles the runtime setup for you:
+## End Users
 
-- creates `.venv` (Python 3.12) if missing
-- installs/syncs dependencies
-- launches the GUI
+Start here:
 
-Manual setup (advanced only):
+- `USER_QUICK_START.md`
 
-```powershell
-py -3.12 -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -r requirements.txt
-.\.venv\Scripts\python.exe mediasorter.py
-```
+## Developers
 
-Optional CLIP provider install:
+Setup/build/testing:
+
+- `DEVELOPER_SETUP.md`
+- `PRODUCT_BACKLOG.md`
+
+## Installer + Payment Link
+
+Build installer:
 
 ```powershell
-python mediasorter_cli.py --ai-provider clip_local --install-ai-provider
-python mediasorter_cli.py --ai-provider clip_local --download-model
+.\build_windows_installer.cmd --clean
 ```
 
-`clip_local` installs into an isolated runtime venv under app data (`runtimes/clip_local`)
-and runs inference through a worker subprocess.
-
-## Bundle (Windows 10/11)
+Embed your checkout link in installer + in-app support button:
 
 ```powershell
-# From the repo root:
-.\build_windows_bundle.cmd --clean --standalone
+.\build_windows_installer.cmd --clean --payment-url "https://your-checkout-link"
 ```
 
-- Default output: `dist\windows\MediaSorter.dist`
-- Optional single file build: `.\build_windows_bundle.cmd --onefile`
-- Build requires Python 3.12 (`py -3.12`) and typically Visual Studio C++ Build Tools for Nuitka.
-- Smoke checklist: `RELEASE_WINDOWS_SMOKETEST.md`
+Env fallback:
 
-## Code Layout
+- `MEDIASORTER_SUPPORT_URL`
+- `MEDIASORTER_PAYMENT_URL`
 
-- `mediasorter.py`: thin entrypoint
-- `mediasorter_cli.py`: CLI parsing and command dispatch
-- `mediasorter_window.py`: main Qt window and user workflow
-- `mediasorter_widgets.py`: custom Qt widgets/dialogs (stacks view, people review)
-- `mediasorter_core.py`: shared core logic (provider selection, model loading, categorization, metadata, workers, persistence)
-- `ai_backend/`: optional AI provider requirements/config
+## Policy + Launch Docs
 
-## Tests
+- `LEGAL_MARKETING_RECOMMENDATIONS.md`
+- `GUMROAD_SETUP_GUIDE.md`
+- `MONETIZATION_QUICKSTART.md`
+- `PRIVACY.md` (template)
+- `TERMS.md` (template)
+- `REFUND_POLICY.md` (template)
 
-```powershell
-py -3 -m unittest discover -s tests -p "test_*.py" -v
-```
+## Repository Layout
 
-- Unit tests: `tests/unit`
-- Integration tests: `tests/integration`
-
-## App Data
-
-MediaSorter stores these in an app data folder (use the in-app **Open App Data Folder** button):
-
-- `categories.txt`
-- `user_corrections.json`
-- `category_prototypes.json`
-
-If you previously had `categories.txt` / `user_corrections.json` next to `mediasorter.py`, the app will migrate them into the app data folder on first run.
-
-## Notes
-
-- CLIP provider first run may download model weights (still runs locally after that).
-- If HandBrake isn't installed at the configured path, video conversion will fail (images will still sort).
+- `mediasorter.py`: main entrypoint
+- `mediasorter_cli.py`: CLI entrypoint
+- `mediasorter_window.py`: Qt app workflow
+- `mediasorter_core.py`: core logic, providers, processing
+- `mediasorter_widgets.py`: Qt support widgets/dialogs
+- `installer/windows/MediaSorter.nsi`: Windows installer definition

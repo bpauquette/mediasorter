@@ -1,17 +1,79 @@
 import argparse
 import json
 import os
+import signal
 import shutil
 import sys
 from pathlib import Path
 
+from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QApplication
 
-import mediasorter_core as core
-from mediasorter_window import MediaSorter
+from mediasorter_enum_bench import benchmark_report
+from mediasorter_shell import MediaSorter
+
+
+def _install_gui_signal_handlers(app: QApplication, window: MediaSorter) -> None:
+    # Qt's native event loop can starve Python signal handling; keep a tiny timer
+    # alive so Ctrl+C is observed promptly in a console-launched session.
+    pulse = QTimer(app)
+    pulse.setInterval(200)
+    pulse.timeout.connect(lambda: None)
+    pulse.start()
+    app._sigint_pulse = pulse  # keep a strong reference on the app
+
+    state = {"count": 0}
+
+    def handle_signal(signum, _frame):
+        state["count"] += 1
+        try:
+            sig_name = signal.Signals(signum).name
+        except Exception:
+            sig_name = str(signum)
+
+        try:
+            print(f"\nReceived {sig_name}; stopping MediaSorter...", file=sys.stderr, flush=True)
+        except Exception:
+            pass
+
+        try:
+            QTimer.singleShot(0, window.close)
+        except Exception:
+            pass
+        try:
+            QTimer.singleShot(0, app.quit)
+        except Exception:
+            pass
+
+        # If a worker is blocked in native code, allow a second Ctrl+C to force exit.
+        if state["count"] >= 2:
+            os._exit(130)
+
+    signal.signal(signal.SIGINT, handle_signal)
+    for extra_name in ("SIGTERM", "SIGBREAK"):
+        sig = getattr(signal, extra_name, None)
+        if sig is None:
+            continue
+        try:
+            signal.signal(sig, handle_signal)
+        except Exception:
+            pass
 
 
 def main(argv=None):
+    pre_parser = argparse.ArgumentParser(add_help=False)
+    pre_parser.add_argument("--benchmark-enum")
+    pre_parser.add_argument("--open-treemap")
+    pre_parser.add_argument("--skip-uac-prompt", action="store_true")
+    pre_args, _remaining = pre_parser.parse_known_args(argv)
+
+    if pre_args.benchmark_enum:
+        report = benchmark_report(str(pre_args.benchmark_enum))
+        print(json.dumps(report, ensure_ascii=False, indent=2), flush=True)
+        return 0
+
+    import mediasorter_core as core
+
     provider_options = core.get_ai_provider_options()
     provider_ids = [str(opt.get("id")) for opt in provider_options if opt.get("id")]
     model_options = core.get_ai_model_options(provider_id=core.AI_PROVIDER_CLIP_LOCAL)
@@ -67,6 +129,9 @@ def main(argv=None):
     parser.add_argument("--output", help="Autorun: output folder")
     parser.add_argument("--interactive", action="store_true", help="Autorun: interactive mode")
     parser.add_argument("--convert-videos", action="store_true", help="Autorun: convert videos to MP4 via HandBrake")
+    parser.add_argument("--open-treemap", help="Open the treemap dialog for a specific drive/path after launch.")
+    parser.add_argument("--skip-uac-prompt", action="store_true", help="Internal: skip the treemap elevation prompt on relaunch.")
+    parser.add_argument("--benchmark-enum", help="Benchmark enumeration strategies for a drive/path and exit.")
     args = parser.parse_args(argv)
 
     if args.list_ai_providers:
@@ -328,8 +393,19 @@ def main(argv=None):
 
     app = QApplication([sys.argv[0]])
     window = MediaSorter()
+    _install_gui_signal_handlers(app, window)
     window.show()
-    return int(app.exec())
+    if args.open_treemap:
+        target_path = str(args.open_treemap)
+        QTimer.singleShot(0, lambda: window._open_drive_treemap(target_path, allow_uac_prompt=not args.skip_uac_prompt))
+    try:
+        return int(app.exec())
+    except KeyboardInterrupt:
+        try:
+            window.close()
+        except Exception:
+            pass
+        return 130
 
 
 if __name__ == "__main__":

@@ -494,8 +494,10 @@ class PeopleReviewDialog(QDialog):
             if img is None:
                 return QPixmap()
             x, y, w, h = bbox
-            x = max(0, int(x)); y = max(0, int(y))
-            w = max(1, int(w)); h = max(1, int(h))
+            x = max(0, int(x))
+            y = max(0, int(y))
+            w = max(1, int(w))
+            h = max(1, int(h))
             crop = img.crop((x, y, x + w, y + h)).convert("RGB")
             return pil_to_qpixmap(crop, max_size=(200, 200))
         except Exception:

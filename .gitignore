@@ -22,6 +22,9 @@ build/
 *.log
 debug.log
 nuitka-crash-report.xml
+.treemap_cache/
+native/build/
+*.obj
 
 # Local/user-generated app state (do not commit)
 user_corrections.json
@@ -29,6 +32,7 @@ category_prototypes.json
 people_db.json
 classification_decisions.jsonl
 mediasorter.log
+mediasorter_shell_settings.json
 
 # IDE/editor
 .vscode/
@@ -38,3 +42,6 @@ mediasorter.log
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# Nested test/runtime caches
+tests/**/__pycache__/
