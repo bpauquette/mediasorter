@@ -525,7 +525,67 @@ def _ensure_search_index_schema(conn: sqlite3.Connection) -> None:
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_media_search_category ON media_search_index(category)"
     )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_media_search_source_path ON media_search_index(source_path)"
+    )
     conn.commit()
+
+
+def _normalized_compare_path(path: str) -> str:
+    try:
+        return os.path.normcase(os.path.normpath(str(path or "").strip()))
+    except Exception:
+        return str(path or "").strip()
+
+
+def _path_is_within_root(path: str, root: str) -> bool:
+    candidate = _normalized_compare_path(path)
+    base = _normalized_compare_path(root)
+    if not candidate or not base:
+        return False
+    try:
+        common = os.path.commonpath([candidate, base])
+    except Exception:
+        return False
+    return common == base
+
+
+def lookup_processed_source(source_path: str, output_root: str | None = None) -> dict | None:
+    src = str(source_path or "").strip()
+    if not src:
+        return None
+    norm_src = _normalized_compare_path(src)
+    try:
+        with _connect_search_index() as conn:
+            _ensure_search_index_schema(conn)
+            rows = conn.execute(
+                """
+                SELECT result_path, source_path, file_name, category, explanation, flow, file_kind, updated_at
+                FROM media_search_index
+                WHERE source_path = ? OR source_path = ?
+                ORDER BY updated_at DESC
+                """,
+                (src, norm_src),
+            ).fetchall()
+            for row in rows:
+                result_path = str(row["result_path"] or "").strip()
+                if not result_path or not os.path.exists(result_path):
+                    continue
+                if output_root and not _path_is_within_root(result_path, output_root):
+                    continue
+                return {
+                    "path": result_path,
+                    "source_path": str(row["source_path"] or ""),
+                    "file_name": str(row["file_name"] or ""),
+                    "category": str(row["category"] or ""),
+                    "explanation": str(row["explanation"] or ""),
+                    "flow": str(row["flow"] or ""),
+                    "file_kind": str(row["file_kind"] or ""),
+                    "updated_at": str(row["updated_at"] or ""),
+                }
+            return None
+    except Exception:
+        return None
 
 
 def _search_terms_for_category(category: str) -> list[str]:
@@ -1331,6 +1391,12 @@ def get_face_support_status() -> dict:
                 "Use opencv-contrib-python-headless in this runtime."
             )
         )
+        if supported:
+            try:
+                _ensure_face_models()
+            except Exception as e:
+                supported = False
+                detail = f"Face identification models are unavailable or invalid: {e}"
         return {
             "supported": supported,
             "has_cv2": True,
@@ -2510,8 +2576,8 @@ _FACE_MODEL_LOCK = threading.Lock()
 FACE_MODELS_DIR = DATA_DIR / "models" / "faces"
 YUNET_MODEL = FACE_MODELS_DIR / "face_detection_yunet_2023mar.onnx"
 SFACE_MODEL = FACE_MODELS_DIR / "face_recognition_sface_2021dec.onnx"
-YUNET_URL = "https://raw.githubusercontent.com/opencv/opencv_zoo/master/models/face_detection_yunet/face_detection_yunet_2023mar.onnx"
-SFACE_URL = "https://raw.githubusercontent.com/opencv/opencv_zoo/master/models/face_recognition_sface/face_recognition_sface_2021dec.onnx"
+YUNET_URL = "https://huggingface.co/opencv/face_detection_yunet/resolve/main/face_detection_yunet_2023mar.onnx?download=true"
+SFACE_URL = "https://huggingface.co/opencv/face_recognition_sface/resolve/main/face_recognition_sface_2021dec.onnx?download=true"
 
 # ---------------------------
 # HELPER FUNCTIONS
@@ -2643,6 +2709,39 @@ def _download_file(url: str, dest: Path) -> None:
     urllib.request.urlretrieve(url, tmp)  # nosec - user-controlled URLs not accepted
     tmp.replace(dest)
 
+
+def _is_git_lfs_pointer_file(path: Path) -> bool:
+    try:
+        if not path.exists() or path.stat().st_size > 1024:
+            return False
+        head = path.read_text(encoding="utf-8", errors="ignore")
+        return head.startswith("version https://git-lfs.github.com/spec/v1")
+    except Exception:
+        return False
+
+
+def _ensure_downloaded_model_file(path: Path, url: str, label: str) -> None:
+    try:
+        size_ok = path.exists() and path.stat().st_size > 1024
+    except Exception:
+        size_ok = False
+    if size_ok and not _is_git_lfs_pointer_file(path):
+        return
+    try:
+        if path.exists():
+            path.unlink()
+    except Exception:
+        pass
+    _log_line(f"[faces] Downloading {label} model to {path}")
+    _download_file(url, path)
+    if _is_git_lfs_pointer_file(path):
+        raise RuntimeError(f"{label} download produced a Git LFS pointer file instead of a model")
+    try:
+        if path.stat().st_size <= 1024:
+            raise RuntimeError(f"{label} download produced an unexpectedly small file")
+    except FileNotFoundError as e:
+        raise RuntimeError(f"{label} model was not downloaded") from e
+
 def _ensure_face_models() -> None:
     """Ensure YuNet (detector) + SFace (recognizer) models are present and loaded."""
     global _FACE_DETECTOR, _FACE_RECOGNIZER
@@ -2660,16 +2759,28 @@ def _ensure_face_models() -> None:
         except Exception:
             pass
 
-        if not YUNET_MODEL.exists():
-            _log_line(f"[faces] Downloading YuNet model to {YUNET_MODEL}")
-            _download_file(YUNET_URL, YUNET_MODEL)
-        if not SFACE_MODEL.exists():
-            _log_line(f"[faces] Downloading SFace model to {SFACE_MODEL}")
-            _download_file(SFACE_URL, SFACE_MODEL)
+        _ensure_downloaded_model_file(YUNET_MODEL, YUNET_URL, "YuNet")
+        _ensure_downloaded_model_file(SFACE_MODEL, SFACE_URL, "SFace")
 
         # Create detector with a default size; will be overridden per-image via setInputSize.
-        _FACE_DETECTOR = cv2.FaceDetectorYN.create(str(YUNET_MODEL), "", (320, 320), 0.9, 0.3, 5000)
-        _FACE_RECOGNIZER = cv2.FaceRecognizerSF.create(str(SFACE_MODEL), "")
+        try:
+            _FACE_DETECTOR = cv2.FaceDetectorYN.create(str(YUNET_MODEL), "", (320, 320), 0.9, 0.3, 5000)
+            _FACE_RECOGNIZER = cv2.FaceRecognizerSF.create(str(SFACE_MODEL), "")
+        except Exception:
+            _FACE_DETECTOR = None
+            _FACE_RECOGNIZER = None
+            try:
+                YUNET_MODEL.unlink(missing_ok=True)
+            except Exception:
+                pass
+            try:
+                SFACE_MODEL.unlink(missing_ok=True)
+            except Exception:
+                pass
+            _ensure_downloaded_model_file(YUNET_MODEL, YUNET_URL, "YuNet")
+            _ensure_downloaded_model_file(SFACE_MODEL, SFACE_URL, "SFace")
+            _FACE_DETECTOR = cv2.FaceDetectorYN.create(str(YUNET_MODEL), "", (320, 320), 0.9, 0.3, 5000)
+            _FACE_RECOGNIZER = cv2.FaceRecognizerSF.create(str(SFACE_MODEL), "")
 
 def _cosine_sim(a: np.ndarray, b: np.ndarray) -> float:
     try:
@@ -3992,6 +4103,7 @@ class AutoProcessThread(QThread):
     progress_signal = Signal(int)
     status_signal = Signal(str)
     done_signal = Signal(dict)
+    current_item_signal = Signal(dict)
     visual_signal = Signal(dict)  # live review payload for the current file
 
     def __init__(
@@ -4228,7 +4340,7 @@ class AutoProcessThread(QThread):
         )
 
     def run(self):
-        counts = {"images":0, "videos":0, "failed":0}
+        counts = {"images":0, "videos":0, "failed":0, "skipped":0}
         for i in range(self.start_index, len(self.files)):
             if self.isInterruptionRequested():
                 break
@@ -4254,7 +4366,52 @@ class AutoProcessThread(QThread):
 
             t0 = time.time()
             try:
+                prior = lookup_processed_source(path, output_root=self.output_folder)
+                if prior is not None:
+                    prior_category = str(prior.get("category") or ("Videos" if file.lower().endswith(VIDEO_EXT) else "Uncategorized"))
+                    prior_dest = str(prior.get("path") or "")
+                    try:
+                        self.current_item_signal.emit(
+                            {
+                                "source_path": path,
+                                "dest_path": prior_dest,
+                                "category": prior_category,
+                                "is_video": bool(file.lower().endswith(VIDEO_EXT)),
+                                "phase": "skipping",
+                                "explanation": f"Already processed earlier. Reusing existing result in '{prior_category}'.",
+                            }
+                        )
+                    except Exception:
+                        pass
+                    try:
+                        self.visual_signal.emit(
+                            {
+                                "source_path": path,
+                                "dest_path": prior_dest,
+                                "category": prior_category,
+                                "is_video": bool(file.lower().endswith(VIDEO_EXT)),
+                                "explanation_source": "previous_run_reuse",
+                                "explanation": f"This file was already processed earlier and was skipped. Existing result: {prior_dest}",
+                            }
+                        )
+                    except Exception:
+                        pass
+                    counts["skipped"] += 1
+                    continue
+
                 if is_vid:
+                    try:
+                        self.current_item_signal.emit(
+                            {
+                                "source_path": path,
+                                "category": "Videos",
+                                "is_video": True,
+                                "phase": "starting",
+                                "explanation": "MediaSorter is preparing this video for the Videos destination.",
+                            }
+                        )
+                    except Exception:
+                        pass
                     out_dir = os.path.join(self.output_folder, "Videos")
                     os.makedirs(out_dir, exist_ok=True)
                     if self.convert_videos:
@@ -4306,6 +4463,18 @@ class AutoProcessThread(QThread):
                         if mb > 0:
                             self._ema_vid_copy_s_per_mb = self._ema(self._ema_vid_copy_s_per_mb, dt / mb)
                 elif is_img:
+                    try:
+                        self.current_item_signal.emit(
+                            {
+                                "source_path": path,
+                                "category": "Analyzing...",
+                                "is_video": False,
+                                "phase": "starting",
+                                "explanation": "MediaSorter is analyzing this image and choosing the best category.",
+                            }
+                        )
+                    except Exception:
+                        pass
                     img = load_image_for_ai(path)
                     predicted, _, _ = _predict_category_internal(path, pil_img=img)
                     toks = _structure_tokens(predicted, path, img)

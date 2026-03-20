@@ -1,0 +1,307 @@
+{
+  "resume_sources": [
+    {
+      "source_path": "C:\\Users\\bryan\\Documents\\resume\\headshot.png",
+      "copied_path": "tests\\face_samples\\bryan\\source_resume\\headshot.png",
+      "detected_faces": 1
+    },
+    {
+      "source_path": "C:\\Users\\bryan\\Documents\\resume\\headshot1.png",
+      "copied_path": "tests\\face_samples\\bryan\\source_resume\\headshot1.png",
+      "detected_faces": 1
+    },
+    {
+      "source_path": "C:\\Users\\bryan\\Documents\\resume\\headshot2.png",
+      "copied_path": "tests\\face_samples\\bryan\\source_resume\\headshot2.png",
+      "detected_faces": 1
+    },
+    {
+      "source_path": "C:\\Users\\bryan\\Documents\\resume\\bpheadshots.png",
+      "copied_path": "tests\\face_samples\\bryan\\source_resume\\bpheadshots.png",
+      "detected_faces": 6
+    },
+    {
+      "source_path": "C:\\Users\\bryan\\Documents\\resume\\bpheadshots2.png",
+      "copied_path": "tests\\face_samples\\bryan\\source_resume\\bpheadshots2.png",
+      "detected_faces": 8
+    },
+    {
+      "source_path": "C:\\Users\\bryan\\Documents\\resume\\headshots.png",
+      "copied_path": "tests\\face_samples\\bryan\\source_resume\\headshots.png",
+      "detected_faces": 8
+    }
+  ],
+  "family_sources": [
+    {
+      "source_path": "H:\\media\\categories\\family photo\\IMG_0702.HEIC",
+      "copied_path": "tests\\face_samples\\bryan\\source_family\\IMG_0702.HEIC",
+      "detected_faces": 1,
+      "selected_by_similarity_to_resume_set": true,
+      "best_face_similarity": 0.9648793935775757,
+      "best_face_index": 1
+    }
+  ],
+  "crops": [
+    {
+      "source_name": "headshot.png",
+      "crop_path": "tests\\face_samples\\bryan\\crops\\headshot_face_01.png",
+      "bbox": [
+        231,
+        135,
+        519,
+        779
+      ]
+    },
+    {
+      "source_name": "headshot1.png",
+      "crop_path": "tests\\face_samples\\bryan\\crops\\headshot1_face_01.png",
+      "bbox": [
+        56,
+        32,
+        51,
+        71
+      ]
+    },
+    {
+      "source_name": "headshot2.png",
+      "crop_path": "tests\\face_samples\\bryan\\crops\\headshot2_face_01.png",
+      "bbox": [
+        120,
+        90,
+        155,
+        210
+      ]
+    },
+    {
+      "source_name": "bpheadshots.png",
+      "crop_path": "tests\\face_samples\\bryan\\crops\\bpheadshots_face_01.png",
+      "bbox": [
+        171,
+        1012,
+        150,
+        209
+      ]
+    },
+    {
+      "source_name": "bpheadshots.png",
+      "crop_path": "tests\\face_samples\\bryan\\crops\\bpheadshots_face_02.png",
+      "bbox": [
+        1128,
+        545,
+        145,
+        207
+      ]
+    },
+    {
+      "source_name": "bpheadshots.png",
+      "crop_path": "tests\\face_samples\\bryan\\crops\\bpheadshots_face_03.png",
+      "bbox": [
+        654,
+        91,
+        136,
+        188
+      ]
+    },
+    {
+      "source_name": "bpheadshots.png",
+      "crop_path": "tests\\face_samples\\bryan\\crops\\bpheadshots_face_04.png",
+      "bbox": [
+        1586,
+        113,
+        138,
+        180
+      ]
+    },
+    {
+      "source_name": "bpheadshots.png",
+      "crop_path": "tests\\face_samples\\bryan\\crops\\bpheadshots_face_05.png",
+      "bbox": [
+        658,
+        1011,
+        128,
+        172
+      ]
+    },
+    {
+      "source_name": "bpheadshots.png",
+      "crop_path": "tests\\face_samples\\bryan\\crops\\bpheadshots_face_06.png",
+      "bbox": [
+        1129,
+        1017,
+        125,
+        176
+      ]
+    },
+    {
+      "source_name": "bpheadshots2.png",
+      "crop_path": "tests\\face_samples\\bryan\\crops\\bpheadshots2_face_01.png",
+      "bbox": [
+        1091,
+        1030,
+        162,
+        222
+      ]
+    },
+    {
+      "source_name": "bpheadshots2.png",
+      "crop_path": "tests\\face_samples\\bryan\\crops\\bpheadshots2_face_02.png",
+      "bbox": [
+        1555,
+        551,
+        155,
+        218
+      ]
+    },
+    {
+      "source_name": "bpheadshots2.png",
+      "crop_path": "tests\\face_samples\\bryan\\crops\\bpheadshots2_face_03.png",
+      "bbox": [
+        620,
+        122,
+        151,
+        203
+      ]
+    },
+    {
+      "source_name": "bpheadshots2.png",
+      "crop_path": "tests\\face_samples\\bryan\\crops\\bpheadshots2_face_04.png",
+      "bbox": [
+        167,
+        530,
+        141,
+        203
+      ]
+    },
+    {
+      "source_name": "bpheadshots2.png",
+      "crop_path": "tests\\face_samples\\bryan\\crops\\bpheadshots2_face_05.png",
+      "bbox": [
+        638,
+        553,
+        140,
+        191
+      ]
+    },
+    {
+      "source_name": "bpheadshots2.png",
+      "crop_path": "tests\\face_samples\\bryan\\crops\\bpheadshots2_face_06.png",
+      "bbox": [
+        1103,
+        92,
+        130,
+        175
+      ]
+    },
+    {
+      "source_name": "bpheadshots2.png",
+      "crop_path": "tests\\face_samples\\bryan\\crops\\bpheadshots2_face_07.png",
+      "bbox": [
+        646,
+        1029,
+        124,
+        177
+      ]
+    },
+    {
+      "source_name": "bpheadshots2.png",
+      "crop_path": "tests\\face_samples\\bryan\\crops\\bpheadshots2_face_08.png",
+      "bbox": [
+        182,
+        89,
+        127,
+        173
+      ]
+    },
+    {
+      "source_name": "headshots.png",
+      "crop_path": "tests\\face_samples\\bryan\\crops\\headshots_face_01.png",
+      "bbox": [
+        1119,
+        553,
+        148,
+        201
+      ]
+    },
+    {
+      "source_name": "headshots.png",
+      "crop_path": "tests\\face_samples\\bryan\\crops\\headshots_face_02.png",
+      "bbox": [
+        1593,
+        106,
+        143,
+        201
+      ]
+    },
+    {
+      "source_name": "headshots.png",
+      "crop_path": "tests\\face_samples\\bryan\\crops\\headshots_face_03.png",
+      "bbox": [
+        657,
+        1040,
+        135,
+        191
+      ]
+    },
+    {
+      "source_name": "headshots.png",
+      "crop_path": "tests\\face_samples\\bryan\\crops\\headshots_face_04.png",
+      "bbox": [
+        1590,
+        1057,
+        139,
+        185
+      ]
+    },
+    {
+      "source_name": "headshots.png",
+      "crop_path": "tests\\face_samples\\bryan\\crops\\headshots_face_05.png",
+      "bbox": [
+        1129,
+        111,
+        133,
+        183
+      ]
+    },
+    {
+      "source_name": "headshots.png",
+      "crop_path": "tests\\face_samples\\bryan\\crops\\headshots_face_06.png",
+      "bbox": [
+        1594,
+        584,
+        126,
+        175
+      ]
+    },
+    {
+      "source_name": "headshots.png",
+      "crop_path": "tests\\face_samples\\bryan\\crops\\headshots_face_07.png",
+      "bbox": [
+        662,
+        574,
+        125,
+        176
+      ]
+    },
+    {
+      "source_name": "headshots.png",
+      "crop_path": "tests\\face_samples\\bryan\\crops\\headshots_face_08.png",
+      "bbox": [
+        187,
+        115,
+        124,
+        173
+      ]
+    },
+    {
+      "source_name": "IMG_0702.HEIC",
+      "crop_path": "tests\\face_samples\\bryan\\crops\\IMG_0702_face_01.png",
+      "bbox": [
+        338,
+        317,
+        688,
+        966
+      ],
+      "max_similarity_to_resume_set": 0.9648793935775757
+    }
+  ]
+}

@@ -25,6 +25,21 @@ py -3.12 -m venv .venv
 
 ```powershell
 py -3 -m unittest discover -s tests -p "test_*.py" -v
+.\.venv\Scripts\python.exe -m pytest
+```
+
+Install dev test tools:
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
+```
+
+Face smoke tests against a real photo library:
+
+```powershell
+set MEDIASORTER_FACE_PHOTO_ROOT=H:\media\photos
+set MEDIASORTER_FACE_SAMPLE_LIMIT=12
+.\.venv\Scripts\python.exe -m pytest tests\face\test_photo_library_face_smoke.py -m "face and photo_library" -vv
 ```
 
 ## Windows Bundle

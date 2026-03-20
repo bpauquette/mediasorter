@@ -2641,6 +2641,7 @@ class MediaSorter(QMainWindow):
         )
         self.thread.progress_signal.connect(self.progress.setValue)
         self.thread.status_signal.connect(self.on_auto_status)
+        self.thread.current_item_signal.connect(self.on_current_item_event)
         self.thread.visual_signal.connect(self.on_visual_event)
         self.thread.done_signal.connect(self.auto_done)
         self.thread.start()
@@ -2665,6 +2666,20 @@ class MediaSorter(QMainWindow):
     def on_visual_event(self, payload: dict):
         try:
             self._append_review_history_entry(payload or {})
+        except Exception:
+            pass
+
+    def on_current_item_event(self, payload: dict):
+        try:
+            entry = payload or {}
+            source_path = str(entry.get("source_path") or "")
+            category = str(entry.get("category") or "Uncategorized")
+            is_video = bool(entry.get("is_video"))
+            explanation = str(entry.get("explanation") or "")
+            self._show_current_media(source_path, category, is_video)
+            if explanation:
+                self.image_explanation_label.setText(explanation)
+            self.image_explanation_state_label.setText("Explanation type: In progress")
         except Exception:
             pass
 
