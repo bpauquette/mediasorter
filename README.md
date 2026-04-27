@@ -42,10 +42,17 @@ Embed your checkout link in installer + in-app support button:
 .\build_windows_installer.cmd --clean --payment-url "https://your-checkout-link"
 ```
 
+If you also run a live licensing service, embed its API base URL too:
+
+```powershell
+.\build_windows_installer.cmd --clean --payment-url "https://your-checkout-link" --license-api-url "https://licenses.example.com"
+```
+
 Env fallback:
 
 - `MEDIASORTER_SUPPORT_URL`
 - `MEDIASORTER_PAYMENT_URL`
+- `MEDIASORTER_LICENSE_API_URL`
 
 ## Policy + Launch Docs
 

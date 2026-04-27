@@ -3,7 +3,7 @@ import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QLabel
 
 from mediasorter_ntfs import NTFSEnumerationProbe
 import mediasorter_shell as shell_mod
@@ -30,39 +30,41 @@ class ShellWindowTests(unittest.TestCase):
         self._settings_patcher.stop()
         self._settings_tmp.cleanup()
 
+    def _menu_labels(self, title):
+        for action in self.window.menuBar().actions():
+            if action.text() == title:
+                menu = action.menu()
+                return [item.text() for item in menu.actions() if not item.isSeparator()]
+        self.fail(f"Menu not found: {title}")
+
     def test_top_level_menu_labels_match_agreed_structure(self):
         labels = [action.text() for action in self.window.menuBar().actions()]
-        self.assertEqual(labels, ["Files", "Edit", "View", "Run", "Help"])
+        self.assertEqual(labels, ["Files", "Edit", "View", "Run", "Tools", "Help"])
 
     def test_files_menu_contains_agreed_actions(self):
-        menu = self.window.files_menu
-        labels = [action.text() for action in menu.actions() if not action.isSeparator()]
-        self.assertEqual(labels, ["Input Folder...", "Output Folder...", "Check Disk Space", "Exit"])
+        self.assertEqual(self._menu_labels("Files"), ["Input Folder...", "Output Folder...", "Check Disk Space", "Exit"])
 
     def test_edit_menu_contains_agreed_actions(self):
-        menu = self.window.edit_menu
-        labels = [action.text() for action in menu.actions() if not action.isSeparator()]
-        self.assertEqual(labels, ["Categories...", "User Preferences..."])
+        self.assertEqual(self._menu_labels("Edit"), ["Categories...", "User Preferences..."])
 
     def test_view_menu_contains_agreed_actions(self):
-        menu = self.window.view_menu
-        labels = [action.text() for action in menu.actions() if not action.isSeparator()]
-        self.assertEqual(labels, ["Classification Log", "Current Item", "Statistics"])
+        self.assertEqual(self._menu_labels("View"), ["Classification Log", "Current Item", "Statistics"])
 
     def test_run_menu_contains_agreed_actions(self):
-        menu = self.window.run_menu
-        labels = [action.text() for action in menu.actions() if not action.isSeparator()]
-        self.assertEqual(labels, ["Start", "Stop"])
+        self.assertEqual(self._menu_labels("Run"), ["Start", "Stop"])
+
+    def test_tools_menu_contains_people_scan_action(self):
+        self.assertEqual(self._menu_labels("Tools"), ["Scan Existing Output For People"])
 
     def test_help_menu_contains_agreed_actions(self):
-        menu = self.window.help_menu
-        labels = [action.text() for action in menu.actions() if not action.isSeparator()]
-        self.assertEqual(labels, ["About", "Welcome", "Check for Updates", "Privacy"])
+        self.assertEqual(self._menu_labels("Help"), ["Welcome"])
 
     def test_center_area_shows_welcome_purpose_and_usage_text(self):
-        self.assertEqual(self.window.subtitle_label.text(), "Organize your photo library")
-        self.assertIn("helps you organize a photo library", self.window.intro_label.text())
-        self.assertIn("Use the Files menu", self.window.welcome_label.text())
+        self.assertEqual(self.window.status_label.text(), "Welcome")
+        self.assertEqual(self.window.page_stack.currentIndex(), self.window._pages["welcome"])
+        labels = [label.text() for label in self.window.findChildren(QLabel)]
+        self.assertIn("How MediaSorter Flows", labels)
+        self.assertTrue(any("Choose folders, review options" in text for text in labels))
 
     def test_window_size_is_restored_from_last_run(self):
         self.window.resize(1111, 777)

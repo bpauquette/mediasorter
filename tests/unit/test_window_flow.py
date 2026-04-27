@@ -163,6 +163,12 @@ class WindowFlowTests(unittest.TestCase):
         self.assertEqual(self.window.progress.format(), "Idle")
         self.assertIn("Ready to configure", self.window.status_label.text())
 
+    def test_trial_mode_is_visible_and_enabled_by_default(self):
+        self.assertTrue(self.window.chk_trial.isVisible())
+        self.assertTrue(self.window.chk_trial.isEnabled())
+        self.assertTrue(self.window.chk_trial.isChecked())
+        self.assertIn("Try Before You Buy", self.window.chk_trial.text())
+
     def test_start_processing_queues_model_load_instead_of_blocking_user(self):
         self.window.input_folder = r"C:\Photos\Inbox"
         self.window.output_folder = r"D:\Sorted"
@@ -195,6 +201,28 @@ class WindowFlowTests(unittest.TestCase):
 
         self.assertTrue(self.window.btn_start.isEnabled())
         self.assertIn("will load when needed", self.window.lbl_summary_ai.text())
+
+    def test_start_processing_limits_trial_runs_to_trial_cap(self):
+        with tempfile.TemporaryDirectory() as input_dir, tempfile.TemporaryDirectory() as output_dir:
+            for name in ("a.jpg", "b.jpg", "c.png", "ignore.txt"):
+                Path(input_dir, name).write_text("x", encoding="utf-8")
+            self.window.input_folder = input_dir
+            self.window.output_folder = output_dir
+            self.window.trial_limit = 2
+            self.window.chk_trial.setChecked(True)
+
+            with (
+                patch.object(window_mod.core, "_MODEL_READY", True),
+                patch.object(window_mod.core, "_MODEL_LOAD_ERROR", None),
+                patch.object(self.window, "start_auto_thread") as start_auto_thread,
+            ):
+                self.window.start_processing()
+
+            start_auto_thread.assert_called_once()
+            self.assertTrue(self.window._trial_active)
+            self.assertEqual(self.window._trial_total_discovered, 3)
+            self.assertEqual(len(self.window.files), 2)
+            self.assertIn("trial will process first 2", self.window.status_label.text().lower())
 
     def test_explanation_source_label_is_visible_for_review_entries(self):
         payload = {

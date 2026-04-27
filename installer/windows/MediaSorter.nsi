@@ -76,6 +76,12 @@ Section "MediaSorter Application (required)" SEC_APP
   FileWrite $1 "${PAYMENT_URL}$\r$\n"
   FileClose $1
 
+!ifdef LICENSE_API_URL
+  FileOpen $2 "$INSTDIR\license_api_url.txt" w
+  FileWrite $2 "${LICENSE_API_URL}$\r$\n"
+  FileClose $2
+!endif
+
   ; URL shortcut files
   WriteINIStr "$INSTDIR\Support and Buy MediaSorter.url" "InternetShortcut" "URL" "${PAYMENT_URL}"
   WriteINIStr "$INSTDIR\Privacy Policy.url" "InternetShortcut" "URL" "${PRIVACY_URL}"
@@ -136,6 +142,7 @@ Section "Uninstall"
   Delete "$INSTDIR\Refund Policy.url"
   Delete "$INSTDIR\Legal and Marketing Guide.url"
   Delete "$INSTDIR\support_url.txt"
+  Delete "$INSTDIR\license_api_url.txt"
   Delete "$INSTDIR\HandBrake (External Tool).url"
   Delete "$INSTDIR\SequoiaView (External Tool).url"
   Delete "$INSTDIR\NOTICES-First-Run.txt"

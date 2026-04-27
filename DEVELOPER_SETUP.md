@@ -60,6 +60,12 @@ With payment URL:
 .\build_windows_installer.cmd --clean --payment-url "https://your-checkout-link"
 ```
 
+With payment URL plus live licensing API:
+
+```powershell
+.\build_windows_installer.cmd --clean --payment-url "https://your-checkout-link" --license-api-url "https://licenses.example.com"
+```
+
 ## Useful Environment Variables
 
 - `MEDIASORTER_SUPPORT_URL`

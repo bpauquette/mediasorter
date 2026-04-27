@@ -10,6 +10,7 @@ from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QApplication
 
 from mediasorter_enum_bench import benchmark_report
+from mediasorter_license import LicenseMonitor, ensure_gui_license
 from mediasorter_shell import MediaSorter
 
 
@@ -392,8 +393,13 @@ def main(argv=None):
             os.environ["MEDIASORTER_AUTORUN_CONVERT_VIDEOS"] = "1"
 
     app = QApplication([sys.argv[0]])
+    if not ensure_gui_license():
+        return 2
     window = MediaSorter()
     _install_gui_signal_handlers(app, window)
+    license_monitor = LicenseMonitor(app, window)
+    app._license_monitor = license_monitor
+    license_monitor.start()
     window.show()
     if args.open_treemap:
         target_path = str(args.open_treemap)

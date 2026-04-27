@@ -59,7 +59,9 @@ If HandBrakeCLI is expected to be supported:
 
 1. Zip `dist\windows\MediaSorter.dist` as release artifact.
 2. Include `README.md` and a short `RUN_WINDOWS.txt` with launch steps.
-3. Record:
+3. Confirm `Support / Buy` opens the intended checkout URL from the installed app.
+4. If the installer was built with `--license-api-url`, confirm activation reaches the live licensing API.
+5. Record:
    - Git commit hash
    - Build machine OS version
    - Python version used for bundling

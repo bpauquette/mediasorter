@@ -370,6 +370,9 @@ class MediaSorter(QMainWindow):
 
         self.live_status_label = QLabel("Status: Ready")
         self.live_status_label.setObjectName("SelectionValue")
+        self.live_now_processing_label = QLabel("Now processing: Waiting")
+        self.live_now_processing_label.setObjectName("WelcomeText")
+        self.live_now_processing_label.setWordWrap(True)
         self.live_progress = QProgressBar()
         self.live_progress.setRange(0, 1)
         self.live_progress.setValue(0)
@@ -377,6 +380,7 @@ class MediaSorter(QMainWindow):
         activity_box = QGroupBox("Current Activity")
         activity_layout = QVBoxLayout()
         activity_layout.addWidget(self.live_status_label)
+        activity_layout.addWidget(self.live_now_processing_label)
         activity_layout.addWidget(self.live_progress)
         activity_box.setLayout(activity_layout)
 
@@ -392,16 +396,16 @@ class MediaSorter(QMainWindow):
         history_layout.addWidget(self.live_review_history, 1)
         history_box.setLayout(history_layout)
 
-        self.live_image_label = QLabel("Current file preview will appear here.")
+        self.live_image_label = QLabel("Last completed preview will appear here.")
         self.live_image_label.setAlignment(Qt.AlignCenter)
         self.live_image_label.setWordWrap(True)
         self.live_image_label.setMinimumSize(420, 260)
-        self.live_image_filename_label = QLabel("No file is being processed yet.")
+        self.live_image_filename_label = QLabel("No completed item yet.")
         self.live_image_filename_label.setObjectName("SectionTitle")
         self.live_image_category_label = QLabel("Category: Waiting")
         self.live_image_category_label.setObjectName("WelcomeText")
-        self.live_image_explanation_label = self._hint("MediaSorter will show the current file here and explain the category it is using.")
-        preview_box = QGroupBox("Current File")
+        self.live_image_explanation_label = self._hint("MediaSorter will hold the last completed item here briefly while the next file continues processing.")
+        preview_box = QGroupBox("Last Completed")
         preview_layout = QVBoxLayout()
         preview_layout.setSpacing(6)
         preview_layout.setContentsMargins(12, 12, 12, 12)
@@ -885,6 +889,7 @@ class MediaSorter(QMainWindow):
         self.live_progress.setValue(0)
         self.live_progress.setFormat("Idle")
         self.live_status_label.setText("Status: Preparing run")
+        self.live_now_processing_label.setText("Now processing: Waiting")
         self.live_review_history.clear()
         self._history_items.clear()
         self._pending_history_entries.clear()
@@ -895,10 +900,10 @@ class MediaSorter(QMainWindow):
         self._display_hold_timer.stop()
         self._current_preview_pixmap = QPixmap()
         self.live_image_label.setPixmap(QPixmap())
-        self.live_image_label.setText("Current file preview will appear here.")
-        self.live_image_filename_label.setText("Waiting for the first file")
+        self.live_image_label.setText("Last completed preview will appear here.")
+        self.live_image_filename_label.setText("Waiting for the first completed item")
         self.live_image_category_label.setText("Category: Waiting")
-        self.live_image_explanation_label.setText("MediaSorter will show each item here and explain the category it is assigning during the run.")
+        self.live_image_explanation_label.setText("MediaSorter will hold the last completed item here briefly while the next file continues processing.")
 
     def _sync_live_review_from_backend(self):
         controller = self._controller
@@ -944,34 +949,30 @@ class MediaSorter(QMainWindow):
         entry = payload or {}
         if self._display_hold_active:
             self._pending_current_item = dict(entry)
+            self._update_now_processing(entry)
             return
-        source_path = str(entry.get("source_path") or "")
-        category = str(entry.get("category") or "Uncategorized")
-        explanation = str(entry.get("explanation") or "")
         phase = str(entry.get("phase") or "").strip().lower()
-        name = os.path.basename(source_path) or source_path or "Unknown file"
-        self.live_image_filename_label.setText(name)
-        self.live_image_category_label.setText(f"Category: {category}")
-        self.live_image_explanation_label.setText(explanation or f"Processing as {category}.")
+        self._update_now_processing(entry)
         if phase == "skipping":
-            self._current_preview_pixmap = QPixmap()
-            self.live_image_label.setPixmap(QPixmap())
-            self.live_image_label.setText("Previously processed item.\nSkipping without re-copying.")
             return
-        try:
-            if bool(entry.get("is_video")):
-                self._current_preview_pixmap = QPixmap()
-                self.live_image_label.setPixmap(QPixmap())
-                self.live_image_label.setText("Video preview unavailable.\nMediaSorter is processing this video now.")
-            else:
-                self._current_preview_pixmap = QPixmap()
-                self.live_image_label.setPixmap(QPixmap())
-                self.live_image_label.setText("Loading preview...")
-                self._queue_current_preview(source_path)
-        except Exception:
-            self._current_preview_pixmap = QPixmap()
-            self.live_image_label.setPixmap(QPixmap())
-            self.live_image_label.setText("Preview unavailable for this file.")
+
+    def _update_now_processing(self, entry):
+        source_path = str((entry or {}).get("source_path") or "")
+        category = str((entry or {}).get("category") or "Uncategorized")
+        explanation = str((entry or {}).get("explanation") or "")
+        phase = str((entry or {}).get("phase") or "").strip().lower()
+        name = os.path.basename(source_path) or source_path or "Unknown file"
+        if phase == "skipping":
+            self.live_now_processing_label.setText(f"Now processing: {name} (skip check)")
+            return
+        if phase == "starting":
+            self.live_now_processing_label.setText(f"Now processing: {name}")
+            return
+        suffix = f" | {category}" if category and category != "Analyzing..." else ""
+        if explanation:
+            self.live_now_processing_label.setText(f"Now processing: {name}{suffix}")
+        else:
+            self.live_now_processing_label.setText(f"Now processing: {name}{suffix}")
 
     def _on_backend_status(self, text):
         status = f"Status: {text}"

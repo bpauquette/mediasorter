@@ -230,10 +230,10 @@ class MediaSorter(QMainWindow):
         self.chk_interactive.setEnabled(False)
         self.chk_people = QCheckBox("Group people after sorting finishes")
         self.chk_people.setChecked(False)
-        self.chk_trial = QCheckBox(f"Trial mode: process the first {self.trial_limit} items")
-        self.chk_trial.setChecked(False)
-        self.chk_trial.setVisible(False)
-        self.chk_trial.setEnabled(False)
+        self.chk_trial = QCheckBox(f"Try Before You Buy: process the first {self.trial_limit} items")
+        self.chk_trial.setChecked(True)
+        self.chk_trial.setVisible(True)
+        self.chk_trial.setEnabled(True)
         self.btn_people_scan_now = QPushButton("Scan Existing Output For People")
         self.btn_people_scan_now.clicked.connect(self.run_people_scan_now)
         self.lbl_face_hint = QLabel(
@@ -2361,7 +2361,9 @@ class MediaSorter(QMainWindow):
             self.status_label.setText("Status: Input scan failed")
             return
         self._trial_total_discovered = len(self.files)
-        self._trial_active = False
+        self._trial_active = bool(self.chk_trial.isChecked())
+        if self._trial_active and len(self.files) > self.trial_limit:
+            self.files = self.files[: self.trial_limit]
 
         try:
             has_heic_inputs = any(f.lower().endswith((".heic", ".heif")) for f in self.files)
@@ -2380,8 +2382,14 @@ class MediaSorter(QMainWindow):
         self.index = 0
         self.progress.setRange(0, len(self.files))
         self.progress.setValue(0)
-        self.status_label.setText(f"Status: Found {len(self.files)} media files")
-        self._run_phase = f"Ready to process {len(self.files)} items"
+        if self._trial_active and self._trial_total_discovered > len(self.files):
+            self.status_label.setText(
+                f"Status: Found {self._trial_total_discovered} media files (trial will process first {len(self.files)})"
+            )
+            self._run_phase = f"Trial ready: processing {len(self.files)} of {self._trial_total_discovered} items"
+        else:
+            self.status_label.setText(f"Status: Found {len(self.files)} media files")
+            self._run_phase = f"Ready to process {len(self.files)} items"
         self.interactive_mode = False
         self._sync_interactive_review_visibility()
         if self.chk_people.isChecked():

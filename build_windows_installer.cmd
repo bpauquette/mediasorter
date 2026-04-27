@@ -3,6 +3,7 @@ setlocal
 
 set "CLEAN=0"
 set "PAYMENT_URL="
+set "LICENSE_API_URL="
 set "ROOT_DIR=%~dp0"
 cd /d "%ROOT_DIR%"
 
@@ -24,12 +25,23 @@ if /I "%~1"=="--payment-url" (
   shift
   goto parse_args
 )
+if /I "%~1"=="--license-api-url" (
+  if "%~2"=="" (
+    echo ERROR: --license-api-url requires a value
+    goto help_error
+  )
+  set "LICENSE_API_URL=%~2"
+  shift
+  shift
+  goto parse_args
+)
 echo Unknown option: %~1
 goto help_error
 
 :args_done
 if not defined PAYMENT_URL if defined MEDIASORTER_SUPPORT_URL set "PAYMENT_URL=%MEDIASORTER_SUPPORT_URL%"
 if not defined PAYMENT_URL if defined MEDIASORTER_PAYMENT_URL set "PAYMENT_URL=%MEDIASORTER_PAYMENT_URL%"
+if not defined LICENSE_API_URL if defined MEDIASORTER_LICENSE_API_URL set "LICENSE_API_URL=%MEDIASORTER_LICENSE_API_URL%"
 set "NSI_FILE=installer\windows\MediaSorter.nsi"
 set "BUNDLE_EXE=dist\windows\MediaSorter.dist\mediasorter.exe"
 set "OUT_EXE=dist\windows\MediaSorterSetup.exe"
@@ -82,12 +94,12 @@ echo.
 echo Building NSIS installer with:
 echo   %MAKENSIS_EXE%
 if defined PAYMENT_URL echo   PAYMENT_URL=%PAYMENT_URL%
+if defined LICENSE_API_URL echo   LICENSE_API_URL=%LICENSE_API_URL%
 echo.
-if defined PAYMENT_URL (
-  "%MAKENSIS_EXE%" /V2 /DPAYMENT_URL="%PAYMENT_URL%" "%NSI_FILE%"
-) else (
-  "%MAKENSIS_EXE%" /V2 "%NSI_FILE%"
-)
+set "NSIS_ARGS=/V2"
+if defined PAYMENT_URL set "NSIS_ARGS=%NSIS_ARGS% /DPAYMENT_URL=%PAYMENT_URL%"
+if defined LICENSE_API_URL set "NSIS_ARGS=%NSIS_ARGS% /DLICENSE_API_URL=%LICENSE_API_URL%"
+"%MAKENSIS_EXE%" %NSIS_ARGS% "%NSI_FILE%"
 if errorlevel 1 (
   echo ERROR: makensis failed.
   exit /b 1
@@ -105,15 +117,17 @@ exit /b 0
 
 :help
 echo Usage:
-echo   build_windows_installer.cmd [--clean] [--payment-url "https://..."]
+echo   build_windows_installer.cmd [--clean] [--payment-url "https://..."] [--license-api-url "https://..."]
 echo.
 echo Options:
 echo   --clean   Clean prior build output before building bundle + installer
 echo   --payment-url  Hosted checkout URL ^(Gumroad/Stripe/PayPal/etc^)
+echo   --license-api-url  MediaSorter licensing API base URL
 echo   --help    Show this help
 echo.
 echo Env fallback:
 echo   MEDIASORTER_SUPPORT_URL or MEDIASORTER_PAYMENT_URL
+echo   MEDIASORTER_LICENSE_API_URL
 echo.
 echo Notes:
 echo   - Requires NSIS ^(makensis.exe^) installed
